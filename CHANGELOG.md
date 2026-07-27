@@ -24,3 +24,4 @@
 - Kept JSON/JSONL view components mounted across edits and refreshes, cancelling stale searches while avoiding unnecessary full UI remounts and preserving draft controls.
 - Routed fire-and-forget toolbar actions through a visible error channel so failed saves, source reveals, and undo/redo operations no longer disappear as unhandled Webview rejections.
 - Added a lightweight Worker-side edge-fingerprint monitor for remote Workspace files so in-flight indexing and queries stop after an external source change.
+- Added a dedicated high-contrast Marketplace icon that remains legible at VS Code activity-bar and extension-list sizes.

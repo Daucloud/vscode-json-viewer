@@ -8,6 +8,7 @@ dist-tests/**
 node_modules/**
 coverage/**
 *.vsix
+media/*.svg
 tsconfig.json
 vitest.config.ts
 package-lock.json

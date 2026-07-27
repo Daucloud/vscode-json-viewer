@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title description">
+  <title id="title">Fast JSON and JSONL Viewer</title>
+  <desc id="description">JSON braces surrounding three fast streaming records.</desc>
+  <defs>
+    <linearGradient id="background" x1="28" y1="20" x2="228" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0ea5e9"/>
+      <stop offset="0.5" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="record" x1="103" y1="80" x2="173" y2="177" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ccfbf1"/>
+      <stop offset="1" stop-color="#ffffff"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#0f172a" flood-opacity="0.32"/>
+    </filter>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="58" fill="#0f172a"/>
+  <rect x="12" y="12" width="232" height="232" rx="54" fill="url(#background)" filter="url(#shadow)"/>
+  <path d="M30 88C43 51 75 29 116 25" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" opacity="0.18"/>
+  <path d="M82 56H77C64 56 58 64 58 78V101C58 114 52 122 40 126C52 130 58 138 58 151V178C58 192 64 200 77 200H82"
+        fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M174 56H179C192 56 198 64 198 78V101C198 114 204 122 216 126C204 130 198 138 198 151V178C198 192 192 200 179 200H174"
+        fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="url(#record)">
+    <circle cx="105" cy="88" r="7"/>
+    <rect x="120" y="81" width="49" height="14" rx="7"/>
+    <circle cx="105" cy="126" r="7"/>
+    <rect x="120" y="119" width="38" height="14" rx="7"/>
+    <circle cx="105" cy="164" r="7"/>
+    <rect x="120" y="157" width="55" height="14" rx="7"/>
+  </g>
+  <path d="M104 189H174" stroke="#fff" stroke-width="5" stroke-linecap="round" opacity="0.34"/>
+  <rect x="12.75" y="12.75" width="230.5" height="230.5" rx="53.25" fill="none" stroke="#fff" stroke-width="1.5" opacity="0.28"/>
+</svg>

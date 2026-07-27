@@ -4,6 +4,7 @@
   "description": "A responsive, lazy JSON tree and streaming JSONL/NDJSON viewer for very large files.",
   "version": "0.1.0",
   "publisher": "daucloud",
+  "icon": "media/icon.png",
   "license": "MIT",
   "repository": {
     "type": "git",

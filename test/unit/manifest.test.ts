@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 const manifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')) as {
   main: string;
+  icon: string;
   extensionKind: string[];
   capabilities: {
     untrustedWorkspaces: { supported: boolean };
@@ -15,6 +16,12 @@ const manifest = JSON.parse(await readFile(new URL('../../package.json', import.
 };
 
 describe('extension manifest', () => {
+  it('ships the Marketplace icon declared by the manifest', async () => {
+    expect(manifest.icon).toBe('media/icon.png');
+    const icon = await readFile(new URL(`../../${manifest.icon}`, import.meta.url));
+    expect(icon.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  });
+
   it('declares desktop/workspace custom editor priorities', () => {
     expect(manifest.main).toBe('./dist/extension.cjs');
     expect(manifest.extensionKind).toContain('workspace');
