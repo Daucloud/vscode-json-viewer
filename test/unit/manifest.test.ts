@@ -4,6 +4,9 @@ import { describe, expect, it } from 'vitest';
 const manifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')) as {
   main: string;
   extensionKind: string[];
+  capabilities: {
+    untrustedWorkspaces: { supported: boolean };
+  };
   contributes: {
     customEditors: Array<{ viewType: string; priority: string; selector: Array<{ filenamePattern: string }> }>;
     commands: Array<{ command: string }>;
@@ -15,6 +18,7 @@ describe('extension manifest', () => {
   it('declares desktop/workspace custom editor priorities', () => {
     expect(manifest.main).toBe('./dist/extension.cjs');
     expect(manifest.extensionKind).toContain('workspace');
+    expect(manifest.capabilities.untrustedWorkspaces.supported).toBe(true);
     const json = manifest.contributes.customEditors.find((editor) => editor.viewType === 'fastJsonViewer.json');
     const jsonl = manifest.contributes.customEditors.find((editor) => editor.viewType === 'fastJsonViewer.jsonl');
     expect(json?.priority).toBe('option');

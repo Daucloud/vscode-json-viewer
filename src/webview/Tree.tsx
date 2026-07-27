@@ -22,6 +22,17 @@ type VisibleItem =
   | { kind: 'more'; parent: TreeNodeSummary; depth: number; offset: number; label: string }
   | { kind: 'status'; parent: TreeNodeSummary; depth: number; label: string };
 
+// Expanding every node in a very large document would eagerly materialize a
+// huge number of summaries in the webview and make the virtualizer's row walk
+// expensive. Keep the action useful for normal documents while preserving the
+// viewer's responsiveness for large collections.
+const EXPAND_ALL_NODE_LIMIT = 20_000;
+const EXPAND_PROGRESS_INTERVAL = 24;
+
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
 export interface TreeExplorerProps {
   root: TreeNodeSummary;
   loadChildren: (pointer: string, offset: number, limit: number) => Promise<TreeChildrenResult>;
@@ -239,6 +250,10 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
   const [depth, setDepth] = useState(2);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingScrollTop = useRef(props.physicalLine === undefined ? api.state().jsonScrollTop : undefined);
+  const [expandingAll, setExpandingAll] = useState(false);
+  const [expansionStatus, setExpansionStatus] = useState<string>();
+  const expansionCancelRequested = useRef(false);
+  const expansionGeneration = useRef(0);
 
   const commitEntries = useCallback((next: Map<string, Entry>): void => {
     entriesRef.current = next;
@@ -246,6 +261,8 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
   }, []);
 
   useEffect(() => {
+    expansionGeneration.current++;
+    expansionCancelRequested.current = true;
     const next = new Map<string, Entry>([[props.root.pointer, { node: props.root }]]);
     commitEntries(next);
     setExpandedState(new Set(props.initialExpanded ?? []));
@@ -331,10 +348,11 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
 
   const expandDepth = useCallback(async (): Promise<void> => {
     const nextExpanded = new Set<string>();
-    let frontier: Array<{ node: TreeNodeSummary; level: number }> = [{ node: props.root, level: 0 }];
+    const frontier: Array<{ node: TreeNodeSummary; level: number }> = [{ node: props.root, level: 0 }];
+    let frontierIndex = 0;
     let visited = 0;
-    while (frontier.length > 0 && visited < 2000) {
-      const current = frontier.shift()!;
+    while (frontierIndex < frontier.length && visited < 2000) {
+      const current = frontier[frontierIndex++]!;
       visited++;
       if (!current.node.hasChildren || current.level >= depth) continue;
       nextExpanded.add(current.node.pointer);
@@ -347,6 +365,115 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
     }
     setExpanded(nextExpanded);
   }, [depth, loadPage, props.root, setExpanded]);
+
+  const expandAll = useCallback(async (): Promise<void> => {
+    if (expandingAll) return;
+    const limit = EXPAND_ALL_NODE_LIMIT;
+    if (props.root.childCount > limit) {
+      setExpansionStatus(`This document has more than ${limit.toLocaleString()} root children. Use Depth for a bounded expansion.`);
+      return;
+    }
+
+    setExpandingAll(true);
+    expansionCancelRequested.current = false;
+    const generation = expansionGeneration.current;
+    setExpansionStatus('Expanding all…');
+    const nextExpanded = new Set<string>();
+    const queue: TreeNodeSummary[] = [props.root];
+    const seen = new Set<string>([props.root.pointer]);
+    let queueIndex = 0;
+    let stoppedAtLimit = false;
+    let cancelledByUser = false;
+    let processedContainers = 0;
+
+    try {
+      while (queueIndex < queue.length) {
+        if (expansionCancelRequested.current || generation !== expansionGeneration.current) {
+          cancelledByUser = true;
+          break;
+        }
+        const node = queue[queueIndex++]!;
+        if (!node.hasChildren) continue;
+        // childCount is known from the worker, so reject a branch before
+        // loading thousands of pages that cannot be shown safely at once.
+        if (seen.size + node.childCount - 1 > limit) {
+          stoppedAtLimit = true;
+          break;
+        }
+
+        let entry = entriesRef.current.get(node.pointer);
+        if (!entry?.children || (entry.startOffset ?? 0) > 0) {
+          await loadPage(node.pointer, 0);
+          entry = entriesRef.current.get(node.pointer);
+        }
+        let startOffset = entry?.startOffset ?? 0;
+        let loadedCount = entry?.children?.length ?? 0;
+        let total = entry?.total ?? node.childCount;
+        if (seen.size + total - 1 > limit) {
+          stoppedAtLimit = true;
+          break;
+        }
+        while (startOffset + loadedCount < total) {
+          if (expansionCancelRequested.current || generation !== expansionGeneration.current) {
+            cancelledByUser = true;
+            break;
+          }
+          const nextOffset = startOffset + loadedCount;
+          await loadPage(node.pointer, nextOffset);
+          entry = entriesRef.current.get(node.pointer);
+          const nextStartOffset = entry?.startOffset ?? 0;
+          const nextLoadedCount = entry?.children?.length ?? 0;
+          if (nextStartOffset + nextLoadedCount <= nextOffset) break;
+          startOffset = nextStartOffset;
+          loadedCount = nextLoadedCount;
+          total = entry?.total ?? total;
+        }
+        if (cancelledByUser) break;
+        if (startOffset + loadedCount < total) {
+          stoppedAtLimit = true;
+          break;
+        }
+
+        nextExpanded.add(node.pointer);
+        for (const child of entry?.children ?? []) {
+          if (seen.has(child.pointer)) continue;
+          seen.add(child.pointer);
+          if (seen.size > limit) {
+            stoppedAtLimit = true;
+            break;
+          }
+          if (child.hasChildren) queue.push(child);
+        }
+        processedContainers++;
+        if (processedContainers % EXPAND_PROGRESS_INTERVAL === 0) {
+          setExpanded(new Set(nextExpanded));
+          setExpansionStatus(`Expanding all… ${seen.size.toLocaleString()} nodes`);
+          await yieldToBrowser();
+        }
+        if (stoppedAtLimit) break;
+      }
+
+      if (generation !== expansionGeneration.current) return;
+      setExpanded(nextExpanded);
+      setExpansionStatus(cancelledByUser
+        ? `Expansion stopped after ${nextExpanded.size.toLocaleString()} containers.`
+        : stoppedAtLimit
+          ? `Expanded ${nextExpanded.size.toLocaleString()} containers; stopped at ${limit.toLocaleString()} nodes to keep the viewer responsive.`
+          : `Expanded ${nextExpanded.size.toLocaleString()} containers.`);
+    } catch (error) {
+      if (generation !== expansionGeneration.current) return;
+      setExpanded(nextExpanded);
+      setExpansionStatus(`Expand all stopped: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if (generation === expansionGeneration.current) setExpandingAll(false);
+    }
+  }, [expandingAll, loadPage, props.root, setExpanded]);
+
+  const cancelExpandAll = useCallback((): void => {
+    if (!expandingAll) return;
+    expansionCancelRequested.current = true;
+    setExpansionStatus('Stopping expansion…');
+  }, [expandingAll]);
 
   useEffect(() => {
     if (!props.focusPointer) return;
@@ -436,6 +563,87 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
     getItemKey: (index) => rows[index]?.kind === 'node' ? `n:${rows[index].node.pointer}` : `${rows[index]?.kind}:${index}`,
   });
   const selected = entries.get(selectedPointer)?.node ?? props.root;
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  const pendingFocusPointer = useRef<string | undefined>(undefined);
+
+  const selectNode = useCallback((pointer: string, rowIndex?: number, focus = false): void => {
+    setSelectedPointer(pointer);
+    props.onSelectedChange?.(pointer);
+    if (!focus) return;
+    pendingFocusPointer.current = pointer;
+    if (rowIndex !== undefined) virtualizer.scrollToIndex(rowIndex, { align: 'auto' });
+  }, [props, virtualizer]);
+
+  useEffect(() => {
+    const pointer = pendingFocusPointer.current;
+    if (pointer === undefined) return;
+    const frame = window.requestAnimationFrame(() => {
+      rowRefs.current.get(pointer)?.focus();
+      if (rowRefs.current.has(pointer)) pendingFocusPointer.current = undefined;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [rows, selectedPointer]);
+
+  const handleTreeKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>, row: Extract<VisibleItem, { kind: 'node' }>, rowIndex: number): void => {
+    const node = row.node;
+    let targetIndex: number | undefined;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      const direction = event.key === 'ArrowDown' ? 1 : -1;
+      for (let index = rowIndex + direction; index >= 0 && index < rows.length; index += direction) {
+        if (rows[index]?.kind === 'node') {
+          targetIndex = index;
+          break;
+        }
+      }
+    } else if (event.key === 'Home' || event.key === 'End') {
+      const direction = event.key === 'Home' ? 1 : -1;
+      const start = event.key === 'Home' ? 0 : rows.length - 1;
+      for (let index = start; index >= 0 && index < rows.length; index += direction) {
+        if (rows[index]?.kind === 'node') {
+          targetIndex = index;
+          break;
+        }
+      }
+    } else if (event.key === 'ArrowRight') {
+      if (node.hasChildren && !expanded.has(node.pointer)) {
+        event.preventDefault();
+        toggle(node);
+        return;
+      }
+      const next = rows[rowIndex + 1];
+      if (node.hasChildren && expanded.has(node.pointer) && next?.kind === 'node' && next.depth > row.depth) {
+        event.preventDefault();
+        selectNode(next.node.pointer, rowIndex + 1, true);
+        return;
+      }
+    } else if (event.key === 'ArrowLeft') {
+      if (expanded.has(node.pointer)) {
+        event.preventDefault();
+        toggle(node);
+        return;
+      }
+      const parent = parentPointer(node.pointer);
+      if (parent !== undefined) {
+        const parentIndex = rows.findIndex((candidate) => candidate.kind === 'node' && candidate.node.pointer === parent);
+        if (parentIndex >= 0) {
+          event.preventDefault();
+          selectNode(parent, parentIndex, true);
+          return;
+        }
+      }
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      if (node.hasChildren) {
+        event.preventDefault();
+        toggle(node);
+        return;
+      }
+    }
+    if (targetIndex === undefined) return;
+    const target = rows[targetIndex];
+    if (target?.kind !== 'node') return;
+    event.preventDefault();
+    selectNode(target.node.pointer, targetIndex, true);
+  }, [expanded, props, rows, selectNode, toggle]);
 
   const rowTree = props.physicalLine !== undefined;
   const defaultTreePanePercent = rowTree ? 56 : 68;
@@ -450,17 +658,21 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
     onChange={(next) => api.updateState({ treePanePercent: next })}
   >
     <section className="tree-column">
-      <div className="tree-toolbar">
+      <div className="tree-toolbar" aria-busy={expandingAll}>
         <div className="tree-toolbar-group">
-          <button className="ghost-button" title="Collapse every expanded node" aria-label="Collapse all" onClick={() => setExpanded(new Set())}><Icon name="collapse" /><span className="button-label">Collapse</span></button>
+          <button className="ghost-button" disabled={expandingAll} title="Collapse every expanded node" aria-label="Collapse all" onClick={() => setExpanded(new Set())}><Icon name="collapse" /><span className="button-label">Collapse</span></button>
           <span className="toolbar-divider" />
-          <label className="depth-control"><span className="depth-label">Depth</span><input className="depth-input" aria-label="Expansion depth" type="number" min={1} max={20} value={depth} onChange={(event) => setDepth(Math.max(1, Number(event.target.value)))} /></label>
-          <button className="ghost-button" title={`Expand tree to depth ${depth}`} aria-label={`Expand tree to depth ${depth}`} onClick={() => void expandDepth()}><Icon name="expand" /><span className="button-label">Expand</span></button>
+          <label className="depth-control"><span className="depth-label">Depth</span><input className="depth-input" disabled={expandingAll} aria-label="Expansion depth" type="number" min={1} max={20} value={depth} onChange={(event) => setDepth(Math.max(1, Number(event.target.value)))} /></label>
+          <button className="ghost-button" disabled={expandingAll} title={`Expand tree to depth ${depth}`} aria-label={`Expand tree to depth ${depth}`} onClick={() => void expandDepth()}><Icon name="expand" /><span className="button-label">Expand</span></button>
+          {expandingAll
+            ? <button className="ghost-button" title="Stop expanding the tree" aria-label="Stop expanding" onClick={cancelExpandAll}><Icon name="close" /><span className="button-label">Stop</span></button>
+            : <button className="ghost-button" title="Expand every node within a safe size limit" aria-label="Expand all" onClick={() => void expandAll()}><Icon name="expandAll" /><span className="button-label">Expand all</span></button>}
         </div>
         <span className="spacer" />
+        {expansionStatus && <span className="expand-status" role="status" title={expansionStatus}>{expandingAll && <span className="button-spinner" />}{expansionStatus}</span>}
         <span className="visible-count"><span className="status-orb" />{rows.length.toLocaleString()} visible</span>
       </div>
-      <div className="tree-scroll" ref={scrollRef} onScroll={(event) => {
+      <div className="tree-scroll" ref={scrollRef} role="tree" aria-label="JSON tree" aria-busy={expandingAll} onScroll={(event) => {
         if (props.physicalLine === undefined) api.updateState({ jsonScrollTop: event.currentTarget.scrollTop });
       }}>
         <div className="virtual-space" style={{ height: virtualizer.getTotalSize() }}>
@@ -470,9 +682,14 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
             if (row.kind === 'status') return <div key={virtualRow.key} className="tree-row tree-status virtual-row" style={style}><span style={{ width: row.depth * 16 }} /><Icon name={row.label === 'Loading…' ? 'refresh' : 'error'} />{row.label}</div>;
             if (row.kind === 'more') return <button key={virtualRow.key} className="tree-row load-more virtual-row" style={{ ...style, paddingLeft: row.depth * 16 + 8 }} onClick={() => void loadPage(row.parent.pointer, row.offset)}><Icon name="plus" />{row.label}</button>;
             const node = row.node;
-            return <div key={virtualRow.key} className={`tree-row virtual-row ${selected.pointer === node.pointer ? 'selected' : ''}`} style={style}
-              role="treeitem" aria-expanded={node.hasChildren ? expanded.has(node.pointer) : undefined}
-              onClick={() => { setSelectedPointer(node.pointer); props.onSelectedChange?.(node.pointer); }}
+            return <div key={virtualRow.key} ref={(element) => {
+                if (element) rowRefs.current.set(node.pointer, element);
+                else rowRefs.current.delete(node.pointer);
+              }} data-pointer={node.pointer} className={`tree-row virtual-row ${selected.pointer === node.pointer ? 'selected' : ''}`} style={style}
+              role="treeitem" tabIndex={selected.pointer === node.pointer ? 0 : -1}
+              aria-level={row.depth + 1} aria-selected={selected.pointer === node.pointer} aria-expanded={node.hasChildren ? expanded.has(node.pointer) : undefined}
+              onKeyDown={(event) => handleTreeKeyDown(event, row, virtualRow.index)}
+              onClick={() => selectNode(node.pointer)}
               onDoubleClick={() => toggle(node)}>
               <span className="indent" style={{ width: row.depth * 16 }} />
               <button className="twisty" aria-label={expanded.has(node.pointer) ? 'Collapse' : 'Expand'} disabled={!node.hasChildren} onClick={(event) => { event.stopPropagation(); toggle(node); }}>{node.hasChildren ? <Icon name={expanded.has(node.pointer) ? 'chevronDown' : 'chevronRight'} size={14} /> : <span className="leaf-dot" />}</button>

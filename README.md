@@ -2,17 +2,20 @@
 
 一个面向大文件的 VS Code JSON / JSONL / NDJSON 查看器。JSON 使用按需展开的彩色树；JSONL 使用纵向与横向双虚拟化表格，并在侧栏按行展示完整 JSON 树。
 
-扩展不发送网络请求、不包含遥测，只在桌面或远程 Workspace Extension Host 中运行。许可证为 MIT。
+扩展不发送网络请求、不包含遥测，只在桌面或远程 Workspace Extension Host 中运行；由于不执行工作区代码，也支持在 VS Code 受限（不受信任）工作区中直接查看文件。许可证为 MIT。
 
 ## 功能
 
 - `.jsonl`、`.ndjson` 默认用 Viewer 打开；`.json` 通过 **Open With → Fast JSON Viewer** 手动进入。
+- 受限工作区无需点击“信任此文件夹”：Viewer 只读取/解析文件内容，不运行工作区任务或调试代码。
 - 小于等于 `10 MB` 的文件可编辑：修改键和值、添加/删除节点、撤销/重做、Save、Save As 与 Hot Exit 备份。
 - `10–100 MB` JSON 在独立 Worker 中只读解析，Webview 每次最多获取 200 个子节点。
+- JSON 树支持按深度展开、全部收起和安全范围内的 **Expand all**；超大分支会自动停止继续物化，避免卡顿。
 - 超过 `100 MB` 的 JSON 使用安全截断预览，不构建完整树。
 - 大型 JSONL 完全流式处理。首屏直接读取前 200 条，后台建立磁盘行索引，源文件不会整体进入扩展宿主或 Webview。
 - JSONL 支持原始行全文搜索，以及基于 JSON Pointer 的等于、不等于、包含、比较、存在和空值过滤。
 - JSONL 的表格/详情、详情树/Inspector 两层分栏均可拖动；比例随当前 Viewer 状态恢复，也可用方向键微调或双击复位。
+- JSON 树和 JSONL 表格支持键盘连续浏览；JSONL 列宽可用拖动或键盘调整，长时间 **Expand all** 可随时停止。
 - Inspector 支持可靠复制 JSON Pointer 与值，成功或失败都会给出明确反馈。
 - 查询命中项保存在临时磁盘索引中；排序默认只允许最多 100 万条结果。
 - 支持 UTF-8 BOM、LF/CRLF、无末尾换行、空行、非法单行、无效 UTF-8 与超长记录。坏行独立标红。
@@ -20,7 +23,7 @@
 
 ## 快速使用
 
-1. 安装生成的 `.vsix`，或在本仓库运行 `npm install && npm run build` 后按 `F5` 启动 Extension Development Host。
+1. 安装生成的 `.vsix`，或首次准备开发环境时运行 `npm install`，之后直接运行 `npm run build` 并按 `F5` 启动 Extension Development Host。
 2. 打开 JSONL/NDJSON 文件会自动进入表格 Viewer。
 3. 对 JSON 文件运行命令 **Fast JSON Viewer: Open in Fast JSON Viewer**，或使用 **Open With**。
 4. JSONL 中可组合全文搜索、字段过滤和字段排序；点击一行后在右侧展开该记录，拖动分隔条可调整各面板宽度。
@@ -44,11 +47,17 @@ JSON Pointer 示例：`/user/id`、`/items/0/name`。属性名中的 `/` 写成 
 ## 性能设计
 
 - 解析、行索引、过滤、搜索和排序全部在有内存上限的 `worker_threads` 中执行。Worker 异常只影响当前预览。
+- 只读会话在懒加载、搜索和源码定位前后复核文件大小、时间戳及首尾块指纹；检测到变化后要求刷新，避免展示过期树或索引。
+- 可编辑文件保存前再次比对磁盘状态；若已有外部修改则拒绝覆盖，并提示刷新或使用 Save As。
 - 行索引按 4096 行分块，长度采用变长整数编码；内存只保留稀疏块元数据和最多 32 个解码块。
 - 索引以 URI、大小、mtime、inode（可用时）以及首尾 64 KB SHA-256 校验。
 - 查询结果是定长的磁盘记录，不在内存中保存全部命中行。
+- JSONL 详情树采用最多 8 条且总源字节不超过 64 MiB 的 LRU；超长单条记录不常驻缓存。
+- JSONL 排序/数值过滤只提取目标 JSON Pointer 的大整数字面量，避免为每条记录建立完整数字索引。
 - Webview 使用 TanStack Virtual；只挂载可见行和可见列，文件内容始终作为纯文本渲染。
 - 单次 Worker → Webview 页面消息限制在约 1 MB 内。
+- 大对象的键列表使用最多 16 MiB 的 LRU，避免翻页时反复分配数十万键，同时不让索引缓存挤占解析预算。
+- 取消搜索/过滤会先在客户端立即解除等待，再通知 Worker 协作收尾，避免忙碌解析阻塞界面。
 
 本机 SSD 的 100 MiB 门禁结果（Apple Silicon，Node 22；数值会随硬件变化）：
 
@@ -65,6 +74,8 @@ JSON Pointer 示例：`/user/id`、`/items/0/name`。属性名中的 `/` 写成 
 
 ## 开发与验证
 
+依赖已存在时不需要重复安装；只有首次准备工作区或锁文件更新后才运行 `npm install`。
+
 ```bash
 npm install
 npm run check
@@ -73,7 +84,7 @@ npm run build
 npm run package
 ```
 
-测试覆盖 JSON Pointer、直接定位懒子树分页、消息大小门禁、任意精度数字比较、行索引、跨 4 MB 块 CRLF、多字节 UTF-8、BOM、空/坏/超长记录、字段过滤、排序上限、缓存损坏和源文件变更。CI 在 macOS、Windows、Linux 执行类型检查、测试、构建与 VSIX 打包，并在 Linux 运行 100 MB 性能门禁。
+测试覆盖 JSON Pointer、直接定位懒子树分页、内联复制预算、消息大小门禁、任意精度数字比较、行索引、跨 4 MB 块 CRLF、多字节 UTF-8、BOM、空/坏/超长记录、字段过滤、排序上限、缓存损坏和源文件变更。CI 在 macOS、Windows、Linux 执行类型检查、测试、构建与 VSIX 打包，并在 Linux 运行带“少量顶层键 + 巨大嵌套值”形状的 100 MB JSON 性能门禁。
 
 ## 安全与限制
 

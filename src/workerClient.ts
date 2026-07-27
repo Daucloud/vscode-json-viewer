@@ -63,6 +63,11 @@ export class WorkerClient implements vscode.Disposable {
       const pending: PendingRequest = { resolve, reject };
       if (options.signal) {
         const onAbort = (): void => {
+          // Reject locally first so a busy worker cannot leave the webview
+          // waiting for an IPC round-trip. The worker still receives the
+          // cancellation request and will discard the operation at its next
+          // cooperative yield.
+          this.rejectPending(requestId, new WorkerClientError('CANCELLED', 'The operation was cancelled.'));
           void this.cancel(requestId);
         };
         options.signal.addEventListener('abort', onAbort, { once: true });
@@ -80,6 +85,7 @@ export class WorkerClient implements vscode.Disposable {
   }
 
   async cancel(targetRequestId: string): Promise<void> {
+    this.rejectPending(targetRequestId, new WorkerClientError('CANCELLED', 'The operation was cancelled.'));
     if (this.disposed || this.exited) return;
     try {
       await this.request({ type: 'cancel', sessionId: '', targetRequestId });
@@ -101,6 +107,14 @@ export class WorkerClient implements vscode.Disposable {
     pending.abort?.();
     if (message.ok) pending.resolve(message.data);
     else pending.reject(new WorkerClientError(message.error.code, message.error.message, message.error.stack));
+  }
+
+  private rejectPending(requestId: string, error: WorkerClientError): void {
+    const pending = this.pending.get(requestId);
+    if (!pending) return;
+    this.pending.delete(requestId);
+    pending.abort?.();
+    pending.reject(error);
   }
 
   private handleExit(message: string, cause?: Error): void {

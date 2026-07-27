@@ -22,6 +22,8 @@ interface JsonSession {
   kind: 'json';
   engine: JsonEngine;
   source: WorkerSource;
+  /** Once a source mismatch is observed, require an explicit refresh. */
+  sourceInvalid: boolean;
   settings: Extract<WorkerRequestBody, { type: 'session/open' }>['settings'];
   cacheDirectory: string;
   cacheKey: string;
@@ -41,9 +43,19 @@ type Session = JsonSession | JsonlSession;
 const sessions = new Map<string, Session>();
 const cancelledRequests = new Set<string>();
 const activeRequests = new Set<string>();
+const IN_PROGRESS_CACHE_GRACE_MS = 60 * 60 * 1000;
 
 function post(message: WorkerResponse): void {
   parentPort!.postMessage(message);
+}
+
+function activeCachePaths(): ReadonlySet<string> {
+  const paths = new Set<string>();
+  for (const session of sessions.values()) {
+    if (session.kind !== 'jsonl') continue;
+    for (const path of session.engine.cachePaths()) paths.add(path);
+  }
+  return paths;
 }
 
 function emit(event: WorkerEvent): void {
@@ -51,11 +63,7 @@ function emit(event: WorkerEvent): void {
   if (event.event === 'indexReady') {
     const session = sessions.get(event.sessionId);
     if (session) {
-      const protectedPaths = new Set([
-        join(session.cacheDirectory, `${session.cacheKey}.lines.idx`),
-        join(session.cacheDirectory, `${session.cacheKey}.lines.meta.json`),
-      ]);
-      void pruneCache(session.cacheDirectory, session.settings.indexCacheBytes, protectedPaths).catch(() => undefined);
+      void pruneCache(session.cacheDirectory, session.settings.indexCacheBytes, activeCachePaths()).catch(() => undefined);
     }
   }
 }
@@ -82,15 +90,42 @@ function getJsonlSession(sessionId: string): JsonlSession {
   return session;
 }
 
-async function readStrictUtf8(source: WorkerSource): Promise<string> {
-  if (source.type === 'text') return source.text;
+interface LoadedTextSource {
+  text: string;
+  source: WorkerSource;
+}
+
+async function readStrictUtf8(source: WorkerSource): Promise<LoadedTextSource> {
+  if (source.type === 'text') return { text: source.text, source };
+  // Keep the verified edge signature in the session.  The extension host only
+  // knows the stat metadata when it creates the worker source; calculating the
+  // edge hash here lets later lazy requests detect same-size/same-mtime edits.
   const signature = await computeFileSignature(source.path, source.signature);
   const bytes = await readFile(source.path);
-  await computeFileSignature(source.path, signature);
+  const verified = await computeFileSignature(source.path, signature);
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return {
+      text: new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+      source: { ...source, signature: verified },
+    };
   } catch (error) {
     throw new PreviewError('INVALID_UTF8', error instanceof Error ? error.message : 'The file is not valid UTF-8.');
+  }
+}
+
+async function assertJsonSourceUnchanged(session: JsonSession): Promise<void> {
+  if (session.sourceInvalid) {
+    throw new PreviewError('SOURCE_CHANGED', 'The source file changed. Refresh the viewer before continuing.');
+  }
+  if (session.source.type !== 'file') return;
+  try {
+    // This checks both metadata and the first/last 64 KiB fingerprint.  The
+    // latter catches replacements that preserve file size and coarse mtime.
+    const signature = await computeFileSignature(session.source.path, session.source.signature);
+    session.source = { ...session.source, signature };
+  } catch (error) {
+    session.sourceInvalid = true;
+    throw error;
   }
 }
 
@@ -107,11 +142,13 @@ async function openSession(
   await closeSession(previous);
 
   if (request.kind === 'json') {
-    const engine = JsonEngine.parse(await readStrictUtf8(request.source), request.source.type === 'text');
+    const loaded = await readStrictUtf8(request.source);
+    const engine = JsonEngine.parse(loaded.text, loaded.source.type === 'text');
     sessions.set(request.sessionId, {
       kind: 'json',
       engine,
-      source: request.source,
+      source: loaded.source,
+      sourceInvalid: false,
       settings: request.settings,
       cacheDirectory: request.cacheDirectory,
       cacheKey: request.cacheKey,
@@ -191,13 +228,22 @@ async function pruneCache(cacheDirectory: string, maximumBytes: number, protecte
     const path = join(cacheDirectory, entry.name);
     try {
       const details = await stat(path);
-      return { path, size: details.size, used: Math.max(details.atimeMs, details.mtimeMs) };
+      return { path, name: entry.name, size: details.size, modified: details.mtimeMs, used: Math.max(details.atimeMs, details.mtimeMs) };
     } catch {
       return undefined;
     }
   }));
   const existing = files.filter((file): file is NonNullable<typeof file> => file !== undefined);
-  const available = existing.filter((file) => !protectedPaths.has(file.path));
+  const now = Date.now();
+  const available = existing.filter((file) => {
+    if (protectedPaths.has(file.path)) return false;
+    // Every document owns an isolated worker, so an in-memory protected set
+    // cannot see another viewer's active writer. Recent query and temporary
+    // index files receive a grace period; crash leftovers become ordinary LRU
+    // candidates after the hour expires.
+    const mayBeInProgress = file.name.startsWith('query-') || file.name.includes('.tmp-');
+    return !mayBeInProgress || now - file.modified >= IN_PROGRESS_CACHE_GRACE_MS;
+  });
   // Protected files still count toward the cache budget; they are merely
   // skipped as deletion candidates while the current session uses them.
   let total = existing.reduce((sum, file) => sum + file.size, 0);
@@ -231,13 +277,37 @@ async function dispatch(request: WorkerRequest): Promise<WorkerResponseData> {
       return { closed: true };
     }
     case 'json/children':
-      return getJsonSession(request.sessionId).engine.children(request.pointer, request.offset, request.limit);
+      {
+        const session = getJsonSession(request.sessionId);
+        await assertJsonSourceUnchanged(session);
+        const result = session.engine.children(request.pointer, request.offset, request.limit);
+        await assertJsonSourceUnchanged(session);
+        return result;
+      }
     case 'json/childPage':
-      return getJsonSession(request.sessionId).engine.childPage(request.parentPointer, request.childPointer, request.limit);
+      {
+        const session = getJsonSession(request.sessionId);
+        await assertJsonSourceUnchanged(session);
+        const result = session.engine.childPage(request.parentPointer, request.childPointer, request.limit);
+        await assertJsonSourceUnchanged(session);
+        return result;
+      }
     case 'json/search':
-      return getJsonSession(request.sessionId).engine.search(request.query, request.limit, cancelled(request.requestId));
+      {
+        const session = getJsonSession(request.sessionId);
+        await assertJsonSourceUnchanged(session);
+        const result = await session.engine.search(request.query, request.limit, cancelled(request.requestId));
+        await assertJsonSourceUnchanged(session);
+        return result;
+      }
     case 'json/location':
-      return getJsonSession(request.sessionId).engine.location(request.pointer);
+      {
+        const session = getJsonSession(request.sessionId);
+        await assertJsonSourceUnchanged(session);
+        const result = session.engine.location(request.pointer);
+        await assertJsonSourceUnchanged(session);
+        return result;
+      }
     case 'jsonl/page':
       return getJsonlSession(request.sessionId).engine.page(request.queryId, request.offset, request.limit, cancelled(request.requestId));
     case 'jsonl/query':

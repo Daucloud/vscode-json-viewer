@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, open, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, open, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -52,8 +52,8 @@ describe('DiskLineIndex', () => {
     const firstSignature = await computeFileSignature(sourcePath);
     const built = await DiskLineIndex.buildFile(sourcePath, indexPath, metadataPath, firstSignature, () => undefined, () => false);
     await built.close();
-    expect(await DiskLineIndex.tryLoad(indexPath, metadataPath, firstSignature)).toBeDefined();
     const loaded = await DiskLineIndex.tryLoad(indexPath, metadataPath, firstSignature);
+    expect(loaded).toBeDefined();
     await loaded?.close();
 
     const handle = await open(sourcePath, 'r+');
@@ -62,6 +62,35 @@ describe('DiskLineIndex', () => {
     const changedSignature = await computeFileSignature(sourcePath);
     expect(changedSignature.edgeHash).not.toBe(firstSignature.edgeHash);
     expect(await DiskLineIndex.tryLoad(indexPath, metadataPath, changedSignature)).toBeUndefined();
+  });
+
+  it('invalidates a cached index when bytes change but size and mtime are restored', async () => {
+    const directory = await temporaryDirectory();
+    const sourcePath = join(directory, 'source.jsonl');
+    const indexPath = join(directory, 'lines.idx');
+    const metadataPath = join(directory, 'lines.json');
+    await writeFile(sourcePath, '{"id":1}\n{"id":2}\n');
+    const firstSignature = await computeFileSignature(sourcePath);
+    const built = await DiskLineIndex.buildFile(sourcePath, indexPath, metadataPath, firstSignature, () => undefined, () => false);
+    await built.close();
+
+    const handle = await open(sourcePath, 'r+');
+    await handle.write(Buffer.from('9'), 0, 1, 6);
+    await handle.close();
+    // Restore the exact recorded timestamp so this assertion exercises the
+    // content fingerprint rather than the ordinary stat metadata check.
+    await utimes(sourcePath, firstSignature.mtimeMs / 1000, firstSignature.mtimeMs / 1000);
+
+    const changedSignature = await computeFileSignature(sourcePath);
+    expect(changedSignature.size).toBe(firstSignature.size);
+    expect(changedSignature.mtimeMs).toBeCloseTo(firstSignature.mtimeMs, 1);
+    expect(changedSignature.edgeHash).not.toBe(firstSignature.edgeHash);
+    if (!changedSignature.edgeHash) throw new Error('Expected a content fingerprint.');
+    // Use the original metadata verbatim to model a filesystem whose mtime
+    // granularity hides the in-place write; only the content fingerprint is
+    // different in this validation.
+    const contentOnlySignature = { ...firstSignature, edgeHash: changedSignature.edgeHash };
+    expect(await DiskLineIndex.tryLoad(indexPath, metadataPath, contentOnlySignature)).toBeUndefined();
   });
 
   it('rejects a cache file whose encoded payload size is corrupt', async () => {

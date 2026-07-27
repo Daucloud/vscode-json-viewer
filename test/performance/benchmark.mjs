@@ -62,8 +62,9 @@ async function generateJsonl(path) {
 
 async function generateJson(path) {
   const output = createWriteStream(path, { highWaterMark: 8 * 1024 * 1024 });
-  await writeChunk(output, '[');
-  let bytes = 1;
+  const prefix = '{"rows":[';
+  await writeChunk(output, prefix);
+  let bytes = Buffer.byteLength(prefix);
   let row = 0;
   let chunk = '';
   let chunkBytes = 0;
@@ -80,7 +81,7 @@ async function generateJson(path) {
     }
   }
   if (chunk) await writeChunk(output, chunk);
-  await writeChunk(output, ']');
+  await writeChunk(output, ']}');
   output.end();
   await once(output, 'close');
   return { rows: row, bytes: (await stat(path)).size };

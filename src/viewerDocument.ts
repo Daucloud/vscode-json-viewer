@@ -127,6 +127,8 @@ export class ViewerDocument implements vscode.CustomDocument {
   private pendingIndexReady: IndexReadyEvent | undefined;
   private watcher?: vscode.FileSystemWatcher;
   private lastKnownMtime = 0;
+  private lastKnownSize = 0;
+  private sourceInvalidated = false;
   private loadGeneration = 0;
   private mutation = Promise.resolve();
 
@@ -237,7 +239,20 @@ export class ViewerDocument implements vscode.CustomDocument {
     if (token.isCancellationRequested) throw new vscode.CancellationError();
     const fileSize = fileStat.size;
     this.dirty = backupUri !== undefined;
-    this.lastKnownMtime = backupUri ? 0 : fileStat.mtime;
+    if (backupUri) {
+      try {
+        const original = await vscode.workspace.fs.stat(this.uri);
+        this.lastKnownMtime = original.mtime;
+        this.lastKnownSize = original.size;
+      } catch {
+        this.lastKnownMtime = 0;
+        this.lastKnownSize = 0;
+      }
+    } else {
+      this.lastKnownMtime = fileStat.mtime;
+      this.lastKnownSize = fileSize;
+    }
+    this.sourceInvalidated = false;
     const editableLimit = this.kind === 'jsonl' ? Math.min(this.settings.editableMaxBytes, 10 * 1024 * 1024) : this.settings.editableMaxBytes;
     let mode: DocumentMode = fileSize <= editableLimit && (this.kind !== 'json' || fileSize <= this.settings.maxJsonBytes)
       ? 'editable'
@@ -366,6 +381,14 @@ export class ViewerDocument implements vscode.CustomDocument {
     };
   }
 
+  private invalidateSource(message: string): void {
+    if (this.disposed || this.sourceInvalidated) return;
+    this.sourceInvalidated = true;
+    this.client?.dispose();
+    this.client = undefined;
+    this.externalChangeEmitter.fire(message);
+  }
+
   private startWatcher(): void {
     if (this.uri.scheme !== 'file') return;
     this.watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(dirname(this.uri.fsPath), basename(this.uri.fsPath)));
@@ -373,14 +396,10 @@ export class ViewerDocument implements vscode.CustomDocument {
       if (this.disposed || this.suppressWatcher) return;
       try {
         const details = await vscode.workspace.fs.stat(this.uri);
-        if (details.mtime === this.lastKnownMtime) return;
-        this.client?.dispose();
-        this.client = undefined;
-        this.externalChangeEmitter.fire('The file changed on disk. Refresh the viewer to use the new contents.');
+        if (details.mtime === this.lastKnownMtime && details.size === this.lastKnownSize) return;
+        this.invalidateSource('The file changed on disk. Refresh the viewer to use the new contents.');
       } catch {
-        this.client?.dispose();
-        this.client = undefined;
-        this.externalChangeEmitter.fire('The source file was deleted or became unavailable.');
+        this.invalidateSource('The source file was deleted or became unavailable.');
       }
     };
     this.watcher.onDidChange(() => void changed());
@@ -462,22 +481,31 @@ export class ViewerDocument implements vscode.CustomDocument {
       await this.client?.cancel(action.targetRequestId);
       return { cancelled: true };
     }
-    if (!this.client) throw new WorkerClientError('FALLBACK_MODE', 'Structured operations are unavailable in the safe fallback preview.');
-    switch (action.type) {
-      case 'json/children':
-        return this.client.request({ type: 'json/children', sessionId: this.sessionId, pointer: action.pointer, offset: action.offset, limit: action.limit }, { requestId });
-      case 'json/childPage':
-        return this.client.request({ type: 'json/childPage', sessionId: this.sessionId, parentPointer: action.parentPointer, childPointer: action.childPointer, limit: action.limit }, { requestId });
-      case 'json/search':
-        return this.client.request({ type: 'json/search', sessionId: this.sessionId, query: action.query, limit: action.limit }, { requestId });
-      case 'jsonl/page':
-        return this.client.request({ type: 'jsonl/page', sessionId: this.sessionId, queryId: action.queryId, offset: action.offset, limit: action.limit }, { requestId });
-      case 'jsonl/query':
-        return this.client.request({ type: 'jsonl/query', sessionId: this.sessionId, queryId: action.queryId, spec: action.spec }, { requestId });
-      case 'jsonl/treeChildren':
-        return this.client.request({ type: 'jsonl/treeChildren', sessionId: this.sessionId, physicalLine: action.physicalLine, pointer: action.pointer, offset: action.offset, limit: action.limit }, { requestId });
-      default:
-        throw new WorkerClientError('INVALID_ACTION', 'This action is handled by the editor host.');
+    const client = this.client;
+    if (!client) throw new WorkerClientError('FALLBACK_MODE', 'Structured operations are unavailable in the safe fallback preview.');
+    try {
+      switch (action.type) {
+        case 'json/children':
+          return await client.request({ type: 'json/children', sessionId: this.sessionId, pointer: action.pointer, offset: action.offset, limit: action.limit }, { requestId });
+        case 'json/childPage':
+          return await client.request({ type: 'json/childPage', sessionId: this.sessionId, parentPointer: action.parentPointer, childPointer: action.childPointer, limit: action.limit }, { requestId });
+        case 'json/search':
+          return await client.request({ type: 'json/search', sessionId: this.sessionId, query: action.query, limit: action.limit }, { requestId });
+        case 'jsonl/page':
+          return await client.request({ type: 'jsonl/page', sessionId: this.sessionId, queryId: action.queryId, offset: action.offset, limit: action.limit }, { requestId });
+        case 'jsonl/query':
+          return await client.request({ type: 'jsonl/query', sessionId: this.sessionId, queryId: action.queryId, spec: action.spec }, { requestId });
+        case 'jsonl/treeChildren':
+          return await client.request({ type: 'jsonl/treeChildren', sessionId: this.sessionId, physicalLine: action.physicalLine, pointer: action.pointer, offset: action.offset, limit: action.limit }, { requestId });
+        default:
+          throw new WorkerClientError('INVALID_ACTION', 'This action is handled by the editor host.');
+      }
+    } catch (error) {
+      if (error instanceof WorkerClientError && error.code === 'SOURCE_CHANGED') {
+        if (this.client === client) this.invalidateSource('The file changed on disk. Refresh the viewer to use the new contents.');
+        else client.dispose();
+      }
+      throw error;
     }
   }
 
@@ -498,12 +526,31 @@ export class ViewerDocument implements vscode.CustomDocument {
     await this.enqueue(async () => {
       if (!this.bootstrapValue.editable || this.text === undefined) return;
       if (token.isCancellationRequested) throw new vscode.CancellationError();
+      const savesOriginal = destination.toString() === this.uri.toString();
+      if (savesOriginal && this.sourceInvalidated) {
+        throw new WorkerClientError('SOURCE_CHANGED', 'The file changed on disk. Refresh it before saving to avoid overwriting external changes.');
+      }
+      if (savesOriginal && (this.lastKnownMtime !== 0 || this.lastKnownSize !== 0)) {
+        try {
+          const current = await vscode.workspace.fs.stat(this.uri);
+          if (current.mtime !== this.lastKnownMtime || current.size !== this.lastKnownSize) {
+            this.invalidateSource('The file changed on disk. Refresh the viewer before saving.');
+            throw new WorkerClientError('SOURCE_CHANGED', 'The file changed on disk. Refresh it before saving to avoid overwriting external changes.');
+          }
+        } catch (error) {
+          if (error instanceof WorkerClientError) throw error;
+          this.invalidateSource('The source file was deleted or became unavailable.');
+          throw new WorkerClientError('SOURCE_CHANGED', 'The source file is no longer available. Use Save As to preserve your edits.');
+        }
+      }
       this.suppressWatcher = true;
       try {
         await atomicWrite(destination, new TextEncoder().encode(this.text));
-        if (destination.toString() === this.uri.toString()) {
+        if (savesOriginal) {
           const details = await vscode.workspace.fs.stat(this.uri);
           this.lastKnownMtime = details.mtime;
+          this.lastKnownSize = details.size;
+          this.sourceInvalidated = false;
         }
         this.savedText = this.text;
         this.dirty = false;
@@ -534,7 +581,10 @@ export class ViewerDocument implements vscode.CustomDocument {
       try {
         const response = await this.client.request({ type: 'json/location', sessionId: this.sessionId, pointer: pointerFromPath(path) });
         if ('offset' in response) sourceOffset = response.offset;
-      } catch {
+      } catch (error) {
+        if (error instanceof WorkerClientError && error.code === 'SOURCE_CHANGED') {
+          this.invalidateSource('The file changed on disk. Refresh the viewer to use the new contents.');
+        }
         // Large/fallback JSON still opens as text, without an exact offset.
       }
     }
@@ -555,8 +605,13 @@ export class ViewerDocument implements vscode.CustomDocument {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    if (this.client) {
-      void this.client.request({ type: 'session/close', sessionId: this.sessionId }).finally(() => this.client?.dispose());
+    const client = this.client;
+    this.client = undefined;
+    if (client) {
+      // Capture the worker being closed. A refresh can create a replacement
+      // client before this close request settles; disposing through
+      // `this.client` here would then terminate the replacement worker.
+      void client.request({ type: 'session/close', sessionId: this.sessionId }).finally(() => client.dispose());
     }
     this.watcher?.dispose();
     this.editEmitter.dispose();

@@ -10,6 +10,7 @@ export type IconName =
   | 'copy'
   | 'error'
   | 'expand'
+  | 'expandAll'
   | 'external'
   | 'fileCode'
   | 'filter'
@@ -38,6 +39,7 @@ const drawings: Record<IconName, React.ReactNode> = {
   copy: <><rect x="5.5" y="5.5" width="8" height="8" rx="1.4"/><path d="M10.5 5.5v-2c0-.6-.4-1-1-1h-7v7c0 .6.4 1 1 1h2"/></>,
   error: <><circle cx="8" cy="8" r="5.6"/><path d="M8 4.7v3.8"/><path d="M8 11.3h.01"/></>,
   expand: <><path d="M7.5 2.5h-5v5"/><path d="m2.5 7.5 4-4"/><path d="M8.5 13.5h5v-5"/><path d="m13.5 8.5-4 4"/></>,
+  expandAll: <><path d="M2.5 6V2.5H6"/><path d="m2.8 2.8 3 3"/><path d="M9.5 2.5h4V6"/><path d="m13.2 2.8-3 3"/><path d="M2.5 10v3.5H6"/><path d="m2.8 13.2 3-3"/><path d="M9.5 13.5h4V10"/><path d="m13.2 13.2-3-3"/></>,
   external: <><path d="M13 8.5v4a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h4"/><path d="M9 2.5h4.5V7"/><path d="m13.2 2.8-6 6"/></>,
   fileCode: <><path d="M4 1.8h5l3 3v9.4H4z"/><path d="M9 1.8v3h3"/><path d="m7 8-1.5 1.5L7 11"/><path d="m9 8 1.5 1.5L9 11"/></>,
   filter: <path d="M2.5 3h11L9.3 8v4.2l-2.6 1.3V8z"/>,

@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { JsonEngine, collectUnsafeIntegers } from '../../src/worker/jsonEngine.js';
+import { JsonEngine, collectUnsafeIntegers, stringifyWithinLimit } from '../../src/worker/jsonEngine.js';
 
 describe('JsonEngine', () => {
+  it('serializes only containers that fit the inline-copy budget', () => {
+    expect(stringifyWithinLimit({ small: ['a', 1, true] })).toBe('{"small":["a",1,true]}');
+    expect(stringifyWithinLimit({ payload: 'x'.repeat(1_000_000) })).toBeUndefined();
+    expect(JsonEngine.parse(JSON.stringify({ payload: 'x'.repeat(1_000_000) })).summary().raw).toBeUndefined();
+  });
+
   it('parses a BOM, pages children lazily, and preserves unsafe integer lexemes', () => {
     const values = Array.from({ length: 450 }, (_, index) => index);
     const text = `\ufeff{"unsafe":900719925474099312345,"values":${JSON.stringify(values)}}`;
@@ -36,11 +42,29 @@ describe('JsonEngine', () => {
     expect(values.has('/safe')).toBe(false);
   });
 
+  it('can collect one exact number without retaining other numeric lexemes', () => {
+    const values = collectUnsafeIntegers('{"first":900719925474099312345,"target":900719925474099312346}', '/target');
+    expect([...values.keys()]).toEqual(['/target']);
+    expect(values.get('/target')).toBe('900719925474099312346');
+  });
+
+  it('does not retain an unsafe lexeme shadowed by a later safe duplicate', () => {
+    const values = collectUnsafeIntegers('{"id":900719925474099312345,"id":2}');
+    expect(values.has('/id')).toBe(false);
+  });
+
   it('locates editable source nodes without retaining source for large-file engines', () => {
     const source = '\ufeff{\n  "outer": {"value": 1}\n}';
     const editable = JsonEngine.parse(source, true);
     expect(editable.location('/outer/value').offset).toBe(source.indexOf('1'));
     expect(() => JsonEngine.parse(source).location('/outer')).toThrow(/editable files only/);
+  });
+
+  it('locates the last duplicate key, matching JSON.parse semantics', () => {
+    const source = '{"value":1,"value":2}';
+    const engine = JsonEngine.parse(source, true);
+    expect(engine.summary('/value', 'value').preview).toBe('2');
+    expect(engine.location('/value').offset).toBe(source.lastIndexOf('2'));
   });
 
   it('searches keys and values asynchronously', async () => {

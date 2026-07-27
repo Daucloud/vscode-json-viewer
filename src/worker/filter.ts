@@ -2,6 +2,31 @@ import { valueAtPointer } from '../shared/pointer.js';
 import type { FilterLiteral, JsonlCell, StructuredFilter } from '../shared/types.js';
 
 export const MISSING = Symbol('missing');
+const COMPACT_SORT_OBJECT = Symbol('compact-sort-object');
+const MAX_COMPACT_SORT_CHARS = 16_384;
+
+interface CompactSortObject {
+  [COMPACT_SORT_OBJECT]: true;
+  text: string;
+}
+
+function isCompactSortObject(value: unknown): value is CompactSortObject {
+  return value !== null && typeof value === 'object' && (value as Partial<CompactSortObject>)[COMPACT_SORT_OBJECT] === true;
+}
+
+/**
+ * Sorting a field that points at an object/array must not retain the complete
+ * parsed record for every match. Keep the same lexical JSON ordering while
+ * retaining only a bounded representation of complex values.
+ */
+export function compactSortValue(value: unknown): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  const encoded = JSON.stringify(value) ?? '';
+  return {
+    [COMPACT_SORT_OBJECT]: true,
+    text: encoded.length <= MAX_COMPACT_SORT_CHARS ? encoded : `${encoded.slice(0, MAX_COMPACT_SORT_CHARS)}…`,
+  } satisfies CompactSortObject;
+}
 
 function valueOrMissing(value: unknown, pointer: string): unknown | typeof MISSING {
   const result = valueAtPointer(value, pointer);
@@ -60,7 +85,7 @@ export function matchesStructuredFilter(
     if (typeof selected !== 'string') return false;
     return filter.caseSensitive
       ? selected.includes(filter.value)
-      : selected.toLocaleLowerCase().includes(filter.value.toLocaleLowerCase());
+      : selected.toLowerCase().includes(filter.value.toLowerCase());
   }
   const order = compareValue(selected, filter.value, exactNumbers.get(filter.pointer));
   if (order === undefined) return filter.comparator === 'ne';
@@ -110,7 +135,7 @@ function rank(value: unknown): number {
   if (typeof value === 'number') return 0;
   if (typeof value === 'string') return 1;
   if (typeof value === 'boolean') return 2;
-  if (value !== null && typeof value === 'object') return 3;
+  if (isCompactSortObject(value) || (value !== null && typeof value === 'object')) return 3;
   if (value === null) return 4;
   return 5;
 }
@@ -122,7 +147,7 @@ export function compareSortValues(left: unknown, right: unknown, leftExact?: str
   if (typeof left === 'string' && typeof right === 'string') return left === right ? 0 : left < right ? -1 : 1;
   if (typeof left === 'boolean' && typeof right === 'boolean') return Number(left) - Number(right);
   if (left === null && right === null) return 0;
-  const a = JSON.stringify(left) ?? '';
-  const b = JSON.stringify(right) ?? '';
+  const a = isCompactSortObject(left) ? left.text : JSON.stringify(left) ?? '';
+  const b = isCompactSortObject(right) ? right.text : JSON.stringify(right) ?? '';
   return a === b ? 0 : a < b ? -1 : 1;
 }

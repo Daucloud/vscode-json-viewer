@@ -20,4 +20,11 @@ describe('resizable split sizing', () => {
     expect(clampSplitPercent(90, 1_000, 420, 300)).toBeCloseTo(69.1);
     expect(clampSplitPercent(55, 1_000, 420, 300)).toBe(55);
   });
+
+  it('normalizes a wide persisted split when the editor is narrow', () => {
+    const bounds = splitBounds(1_052, 420, 480);
+    expect(bounds.minimum).toBeCloseTo(39.92, 2);
+    expect(bounds.maximum).toBeCloseTo(53.52, 2);
+    expect(clampSplitPercent(72, 1_052, 420, 480)).toBeCloseTo(bounds.maximum);
+  });
 });

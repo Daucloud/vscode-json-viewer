@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as assert from 'node:assert/strict';
@@ -94,6 +94,13 @@ export async function run(): Promise<void> {
       await customDocument.save(jsonUri, cancellation.token);
       assert.equal(customDocument.isDirty, false);
       assert.match(await readFile(jsonUri.fsPath, 'utf8'), /"Grace"/);
+
+      await customDocument.applyEdit({ kind: 'set', path: ['name'], value: 'Local unsaved edit' });
+      await writeFile(jsonUri.fsPath, '{"name":"External edit"}');
+      await assert.rejects(customDocument.save(jsonUri, cancellation.token), (error: unknown) => {
+        return error instanceof Error && (error as { code?: string }).code === 'SOURCE_CHANGED';
+      });
+      assert.match(await readFile(jsonUri.fsPath, 'utf8'), /External edit/);
       editSubscription.dispose();
     } finally {
       customDocument.dispose();
@@ -149,6 +156,57 @@ export async function run(): Promise<void> {
       assert.match(await crashed, /stopped unexpectedly|Worker error/);
     } finally {
       crashClient.dispose();
+    }
+
+    const slowExtension = join(directory, 'slow-extension');
+    await vscode.workspace.fs.createDirectory(vscode.Uri.file(join(slowExtension, 'dist')));
+    await writeFile(join(slowExtension, 'dist', 'worker.cjs'), `
+      const { parentPort } = require('node:worker_threads');
+      parentPort.on('message', (message) => {
+        if (message.type === 'cancel') {
+          parentPort.postMessage({ type: 'response', requestId: message.requestId, ok: true, data: { cancelled: true } });
+          return;
+        }
+        setTimeout(() => parentPort.postMessage({
+          type: 'response', requestId: message.requestId, ok: true,
+          data: { rss: 1, heapUsed: 1, heapTotal: 1, external: 1 },
+        }), 500);
+      });
+    `);
+    const slowClient = new WorkerClient(vscode.Uri.file(slowExtension));
+    try {
+      const controller = new AbortController();
+      const started = Date.now();
+      const pending = slowClient.request({ type: 'diagnostics/memory' }, { signal: controller.signal });
+      controller.abort();
+      await assert.rejects(pending, (error: unknown) => error instanceof Error && error.message.includes('cancelled'));
+      assert.ok(Date.now() - started < 200, 'Client-side cancellation should not wait for a busy worker.');
+    } finally {
+      slowClient.dispose();
+    }
+
+    const guardedPath = join(directory, 'guarded.json');
+    await writeFile(guardedPath, '{"items":[1,2,3]}');
+    const guardedStat = await stat(guardedPath);
+    const guardClient = new WorkerClient(extension.extensionUri);
+    try {
+      await guardClient.request({
+        type: 'session/open', sessionId: 'guarded', kind: 'json',
+        source: { type: 'file', path: guardedPath, signature: { size: guardedStat.size, mtimeMs: guardedStat.mtimeMs } },
+        settings: {
+          editableMaxBytes: 10 * 1024 * 1024, maxJsonBytes: 100 * 1024 * 1024,
+          pageSize: 200, schemaSampleRows: 1000, maxLineBytes: 16 * 1024 * 1024,
+          sortMaxRows: 1_000_000, indexCacheBytes: 1024 * 1024 * 1024,
+        },
+        cacheDirectory: join(directory, 'guard-cache'), cacheKey: 'guarded',
+      });
+      await writeFile(guardedPath, '{"items":[9,2,3]}');
+      await assert.rejects(
+        guardClient.request({ type: 'json/children', sessionId: 'guarded', pointer: '', offset: 0, limit: 20 }),
+        (error: unknown) => error instanceof Error && (error as { code?: string }).code === 'SOURCE_CHANGED',
+      );
+    } finally {
+      guardClient.dispose();
     }
   } finally {
     await vscode.commands.executeCommand('workbench.action.closeAllGroups');

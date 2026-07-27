@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import type { JsonOpenResult, TreeChildrenResult, TreeSearchResult } from '../shared/types.js';
 import type { ViewerEdit } from '../shared/webviewProtocol.js';
-import { api } from './api.js';
+import { api, RequestError } from './api.js';
 import { Icon } from './Icons.js';
 import { TreeExplorer } from './Tree.js';
 
@@ -27,7 +27,9 @@ export function JsonView({ result, editable }: { result: JsonOpenResult; editabl
       const response = await operation.promise;
       setMatches(response);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      if (!(caught instanceof RequestError && caught.failure.code === 'CANCELLED')) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
     } finally {
       setSearching(false);
       setSearchRequest(undefined);

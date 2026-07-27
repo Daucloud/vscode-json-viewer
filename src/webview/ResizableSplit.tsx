@@ -59,10 +59,16 @@ export function ResizableSplit({
   const containerRef = useRef<HTMLDivElement>(null);
   const activePointer = useRef<number | undefined>(undefined);
   const percentRef = useRef(normalizeSplitPercent(initialPercent, defaultPercent));
+  const onChangeRef = useRef(onChange);
   const [percent, setPercent] = useState(percentRef.current);
+  const [containerWidth, setContainerWidth] = useState(0);
   const panes = React.Children.toArray(children);
 
   if (panes.length !== 2) throw new Error('ResizableSplit requires exactly two panes.');
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
 
   const update = (next: number): number => {
     const width = containerRef.current?.getBoundingClientRect().width ?? 0;
@@ -92,6 +98,43 @@ export function ResizableSplit({
     document.body.classList.remove('resizing-columns');
   }, []);
 
+  // A persisted percentage can be valid in a wide editor but impossible in a
+  // narrow one. CSS clamps the grid visually, so normalize the React state as
+  // soon as the real container width is known as well. Without this pass,
+  // keyboard arrows and aria-valuenow would operate on the hidden, unclamped
+  // value (for example 72% while the visible pane is limited to 53%).
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+    const measure = (width = element.getBoundingClientRect().width): void => {
+      if (!Number.isFinite(width) || width <= 0) return;
+      setContainerWidth((previous) => Math.abs(previous - width) < 0.5 ? previous : width);
+      const clamped = clampSplitPercent(percentRef.current, width, minStart, minEnd);
+      if (Math.abs(clamped - percentRef.current) < 0.01) return;
+      percentRef.current = clamped;
+      setPercent(clamped);
+      onChangeRef.current?.(clamped);
+    };
+    measure();
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver((entries) => {
+        const width = entries[0]?.contentRect.width;
+        measure(width);
+      });
+      observer.observe(element);
+      return () => observer.disconnect();
+    }
+    const handleResize = (): void => measure();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [minEnd, minStart]);
+
+  const measuredWidth = containerWidth || containerRef.current?.clientWidth || 0;
+  const bounds = splitBounds(measuredWidth, minStart, minEnd);
+  const accessiblePercent = measuredWidth > 0
+    ? clampSplitPercent(percent, measuredWidth, minStart, minEnd)
+    : percent;
+
   const style: SplitStyle = {
     '--split-start': `${percent}%`,
     '--split-min-start': `${minStart}px`,
@@ -105,9 +148,9 @@ export function ResizableSplit({
       role="separator"
       aria-label={label}
       aria-orientation="vertical"
-      aria-valuemin={Math.round(splitBounds(containerRef.current?.clientWidth ?? 0, minStart, minEnd).minimum)}
-      aria-valuemax={Math.round(splitBounds(containerRef.current?.clientWidth ?? 0, minStart, minEnd).maximum)}
-      aria-valuenow={Math.round(percent)}
+      aria-valuemin={Math.round(bounds.minimum)}
+      aria-valuemax={Math.round(bounds.maximum)}
+      aria-valuenow={Math.round(accessiblePercent)}
       tabIndex={0}
       title="Drag to resize. Use Left/Right arrows for precise adjustment; double-click to reset."
       onDoubleClick={() => {

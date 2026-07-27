@@ -261,6 +261,8 @@ body.resizing-columns, body.resizing-columns * { cursor: col-resize !important; 
 .tree-toolbar button { min-height: 27px; padding-inline: 7px; }
 .depth-control { display: flex; align-items: center; gap: 5px; padding-left: 3px; font-size: 11px; white-space: nowrap; }
 .depth-input { width: 43px; height: 26px; padding: 2px 4px; text-align: center; font-variant-numeric: tabular-nums; }
+.expand-status { display: inline-flex; align-items: center; gap: 5px; max-width: min(42%, 360px); overflow: hidden; color: var(--vscode-descriptionForeground); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.expand-status .button-spinner { width: 10px; height: 10px; border-width: 1px; }
 .visible-count { display: inline-flex; align-items: center; gap: 6px; padding: 2px 5px; font-size: 10px; white-space: nowrap; }
 .visible-count .status-orb { background: var(--vscode-descriptionForeground); opacity: .65; }
 .tree-scroll { flex: 1; min-height: 0; overflow: auto; font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size); }
@@ -290,12 +292,13 @@ body.resizing-columns, body.resizing-columns * { cursor: col-resize !important; 
 
 @container tree-pane (max-width: 520px) {
   .tree-toolbar .button-label, .tree-toolbar .visible-count { display: none; }
+  .tree-toolbar .expand-status { display: inline-flex; flex: 1 1 auto; min-width: 0; max-width: none; }
   .tree-toolbar button { width: 28px; min-width: 28px; padding: 0; }
   .tree-toolbar .ui-icon { width: 15px; height: 15px; }
 }
 
 @container tree-pane (max-width: 350px) {
-  .tree-toolbar .depth-label, .tree-toolbar .toolbar-divider { display: none; }
+  .tree-toolbar .depth-label, .tree-toolbar .toolbar-divider, .tree-toolbar .expand-status { display: none; }
   .depth-control { padding-left: 0; }
 }
 
@@ -365,6 +368,7 @@ body.resizing-columns, body.resizing-columns * { cursor: col-resize !important; 
 .summary-divider { width: 1px; height: 13px; background: var(--viewer-border); }
 .query-status { border-color: var(--viewer-border-soft); color: var(--vscode-descriptionForeground); background: transparent; font-size: 8px; line-height: 17px; }
 .query-status.active { color: var(--vscode-textLink-foreground); border-color: color-mix(in srgb, var(--vscode-textLink-foreground) 27%, transparent); background: var(--viewer-accent-soft); }
+.query-status.pending { color: var(--viewer-orange); border-color: color-mix(in srgb, var(--viewer-orange) 30%, transparent); background: color-mix(in srgb, var(--viewer-orange) 8%, transparent); }
 .index-state { display: inline-flex; align-items: center; gap: 6px; padding-right: 3px; white-space: nowrap; }
 .index-state.ready { color: var(--viewer-green); }
 .index-state:not(.ready) .status-orb { animation: pulse 1.2s ease-in-out infinite; }
@@ -391,6 +395,8 @@ body.resizing-columns, body.resizing-columns * { cursor: col-resize !important; 
 .column-resizer { position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; }
 .column-resizer::after { content: ''; position: absolute; inset: 7px 3px; background: transparent; }
 .column-resizer:hover::after { background: var(--viewer-accent); }
+.column-resizer:focus-visible { outline: 1px solid var(--viewer-accent); outline-offset: -1px; }
+.column-resizer:focus-visible::after { background: var(--viewer-accent); }
 .cell-skeleton { width: min(76%, 120px); height: 7px; border-radius: 4px; background: linear-gradient(90deg, var(--viewer-surface-raised), color-mix(in srgb, var(--viewer-surface-raised) 65%, var(--vscode-foreground) 10%), var(--viewer-surface-raised)); background-size: 200% 100%; animation: shimmer 1.25s linear infinite; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 .table-empty { position: sticky; left: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 3px; width: min(100%, 520px); min-height: 210px; margin: 0 auto; color: var(--vscode-descriptionForeground); text-align: center; }

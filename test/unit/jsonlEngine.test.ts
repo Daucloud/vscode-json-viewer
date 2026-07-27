@@ -120,6 +120,22 @@ describe('JsonlEngine', () => {
     await opened.engine.close();
   });
 
+  it('sorts unsafe integer fields by their exact decimal lexemes', async () => {
+    const opened = await openText([
+      '{"id":900719925474099312347}',
+      '{"id":900719925474099312345}',
+      '{"id":900719925474099312346}',
+    ].join('\n'));
+    await opened.engine.query('unsafe-sort', { sort: { pointer: '/id', direction: 'asc' } }, 'request', () => false);
+    const page = await opened.engine.page('unsafe-sort', 0, 20);
+    expect(page.rows.map((row) => row.cells['/id'])).toEqual([
+      '900719925474099312345',
+      '900719925474099312346',
+      '900719925474099312347',
+    ]);
+    await opened.engine.close();
+  });
+
   it('supports raw text search and field sorting', async () => {
     const opened = await openText('{"rank":3,"name":"keep"}\n{"rank":1,"name":"drop"}\n{"rank":2,"name":"keep"}\n');
     const searched = await opened.engine.query('search', { text: 'keep' }, 'search-request', () => false);
@@ -131,6 +147,27 @@ describe('JsonlEngine', () => {
     await opened.engine.close();
   });
 
+  it('keeps active disk-backed query results discoverable for cache protection', async () => {
+    const opened = await openText('{"id":1}\n{"id":2}\n');
+    expect(opened.engine.cachePaths().size).toBe(0);
+    await opened.engine.query('active-result', { text: 'id' }, 'request', () => false);
+    const paths = [...opened.engine.cachePaths()];
+    expect(paths).toHaveLength(1);
+    expect(paths[0]).toMatch(/query-/);
+    await opened.engine.close();
+  });
+
+  it('cancels an older scan when a newer query starts in the same session', async () => {
+    const text = Array.from({ length: 50_000 }, (_, index) => `{"id":${index}}`).join('\n');
+    const opened = await openText(text);
+    const first = opened.engine.query('first', { text: 'id' }, 'first-request', () => false);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const latest = await opened.engine.query('latest', {}, 'latest-request', () => false);
+    expect(latest.matchedRows).toBe(50_000);
+    await expect(first).rejects.toMatchObject({ code: 'CANCELLED' });
+    await opened.engine.close();
+  });
+
   it('enforces the configured global sort limit', async () => {
     const opened = await openText('{"rank":2}\n{"rank":1}', { sortMaxRows: 1 });
     await expect(opened.engine.query('sort', { sort: { pointer: '/rank', direction: 'asc' } }, 'request', () => false)).rejects.toMatchObject({ code: 'SORT_LIMIT' });
@@ -139,6 +176,14 @@ describe('JsonlEngine', () => {
       sort: { pointer: '/rank', direction: 'asc' },
     }, 'filtered-request', () => false);
     expect(filtered.matchedRows).toBe(1);
+    await opened.engine.close();
+  });
+
+  it('rejects malformed query pointers before scanning records', async () => {
+    const opened = await openText('{"id":1}\n');
+    await expect(opened.engine.query('invalid-pointer', {
+      filter: { op: 'exists', pointer: 'not-a-pointer' },
+    }, 'request', () => false)).rejects.toMatchObject({ code: 'INVALID_POINTER' });
     await opened.engine.close();
   });
 });

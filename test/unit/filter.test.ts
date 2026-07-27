@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareDecimals, compareSortValues, flattenForTable, matchesStructuredFilter } from '../../src/worker/filter.js';
+import { compactSortValue, compareDecimals, compareSortValues, flattenForTable, matchesStructuredFilter } from '../../src/worker/filter.js';
 
 describe('JSONL filters', () => {
   it('compares arbitrary decimal lexemes without rounding', () => {
@@ -31,5 +31,13 @@ describe('JSONL filters', () => {
     expect(compareSortValues(2, 10)).toBeLessThan(0);
     expect(compareSortValues('2', 10)).toBeGreaterThan(0);
     expect(compareSortValues(1, 1, '9007199254740993', '9007199254740992')).toBeGreaterThan(0);
+  });
+
+  it('compacts object sort keys instead of retaining parsed record graphs', () => {
+    const value = { nested: { score: 2 } };
+    const compact = compactSortValue(value) as { text: string };
+    expect(compact).not.toBe(value);
+    expect(compact.text).toBe('{"nested":{"score":2}}');
+    expect(compareSortValues(compact, compact)).toBe(0);
   });
 });

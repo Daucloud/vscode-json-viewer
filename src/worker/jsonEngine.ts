@@ -16,6 +16,14 @@ const MAX_PREVIEW = 180;
 // counting only the number of children is not sufficient here.
 export const MAX_TREE_MESSAGE_BYTES = 900 * 1024;
 const UTF8_ENCODER = new TextEncoder();
+const KEY_CACHE_MIN_KEYS = 256;
+const KEY_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+const KEY_CACHE_MAX_ENTRY_BYTES = 8 * 1024 * 1024;
+// Most documents contain only ordinary short numbers. A cheap lexical probe
+// lets the common path skip jsonc-parser's full visitor entirely; false
+// positives (digits inside a string) only cost an occasional scan, while a
+// false negative would risk losing an exact numeric lexeme.
+const MAYBE_UNSAFE_NUMBER = /[+-]?(?:(?:\d{16,})(?:\.\d*)?|(?:\d+\.\d{16,}))(?:[eE][+-]?\d+)?|[+-]?\d+[eE][+-]?\d+/;
 
 function truncate(value: string, length = MAX_PREVIEW): string {
   return value.length <= length ? value : `${value.slice(0, length)}…`;
@@ -29,6 +37,51 @@ function serializedBytes(value: unknown): number {
 function withoutRaw(node: TreeNodeSummary): TreeNodeSummary {
   const { raw: _raw, ...compact } = node;
   return compact;
+}
+
+/**
+ * Serialize only values that are provably small. Calling JSON.stringify first
+ * and checking its length afterwards can duplicate a 100 MB container merely
+ * because it has one top-level property. This iterative budget walk rejects
+ * large strings/collections before allocating the encoded result.
+ */
+export function stringifyWithinLimit(value: unknown, maximumChars = 16_384): string | undefined {
+  if (!Number.isFinite(maximumChars) || maximumChars < 0) return undefined;
+  let remaining = Math.floor(maximumChars);
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === null) {
+      remaining -= 4;
+    } else if (typeof current === 'string') {
+      if (current.length + 2 > remaining) return undefined;
+      remaining -= JSON.stringify(current).length;
+    } else if (typeof current === 'number') {
+      remaining -= String(current).length;
+    } else if (typeof current === 'boolean') {
+      remaining -= current ? 4 : 5;
+    } else if (Array.isArray(current)) {
+      remaining -= 2 + Math.max(0, current.length - 1);
+      if (remaining < 0) return undefined;
+      for (let index = current.length - 1; index >= 0; index--) stack.push(current[index]);
+    } else if (typeof current === 'object') {
+      remaining -= 2;
+      let properties = 0;
+      for (const key in current as Record<string, unknown>) {
+        if (!Object.prototype.hasOwnProperty.call(current, key)) continue;
+        if (properties++ > 0) remaining--;
+        if (key.length + 3 > remaining) return undefined;
+        remaining -= JSON.stringify(key).length + 1;
+        if (remaining < 0) return undefined;
+        stack.push((current as Record<string, unknown>)[key]);
+      }
+    } else {
+      return undefined;
+    }
+    if (remaining < 0) return undefined;
+  }
+  const encoded = JSON.stringify(value);
+  return encoded !== undefined && encoded.length <= maximumChars ? encoded : undefined;
 }
 
 /**
@@ -119,11 +172,17 @@ function isUnsafeIntegerLiteral(raw: string): boolean {
   }
 }
 
-export function collectUnsafeIntegers(text: string): Map<string, string> {
+export function collectUnsafeIntegers(text: string, targetPointer?: string): Map<string, string> {
   const result = new Map<string, string>();
+  if (!MAYBE_UNSAFE_NUMBER.test(text)) return result;
   visit(text, {
     onLiteralValue(value, offset, length, _line, _character, getPath) {
       if (typeof value !== 'number') return;
+      let pointer: string | undefined;
+      if (targetPointer !== undefined) {
+        pointer = pointerFromPath(getPath());
+        if (pointer !== targetPointer) return;
+      }
       // Most JSON numbers are short, ordinary integers.  Avoid allocating a
       // substring and running the BigInt/regex path for those values.  An
       // unsafe integer is either long enough to contain 16 significant digits
@@ -137,30 +196,36 @@ export function collectUnsafeIntegers(text: string): Map<string, string> {
             break;
           }
         }
-        if (!exponent) return;
+        if (!exponent) {
+          // Keep duplicate-key handling aligned with JSON.parse, which keeps
+          // the last occurrence even when that occurrence is safe.
+          if (targetPointer !== undefined || result.size > 0) result.delete(pointer ??= pointerFromPath(getPath()));
+          return;
+        }
       }
       const raw = text.slice(offset, offset + length);
-      if (isUnsafeIntegerLiteral(raw)) result.set(pointerFromPath(getPath()), raw);
+      if (isUnsafeIntegerLiteral(raw)) result.set(pointer ??= pointerFromPath(getPath()), raw);
+      else if (targetPointer !== undefined || result.size > 0) result.delete(pointer ??= pointerFromPath(getPath()));
     },
   });
   return result;
 }
 
-function previewForValue(value: unknown, pointer: string, exactNumbers: ReadonlyMap<string, string>, includeContainerRaw: boolean): { preview: string; raw?: string } {
+function previewForValue(value: unknown, pointer: string, exactNumbers: ReadonlyMap<string, string>, includeContainerRaw: boolean, knownChildCount?: number): { preview: string; raw?: string } {
   const type = jsonValueType(value);
   if (type === 'object') {
-    const count = Object.keys(value as object).length;
+    const count = knownChildCount ?? Object.keys(value as object).length;
     if (includeContainerRaw && count <= 32 && exactNumbers.size === 0) {
-      const encoded = JSON.stringify(value);
-      if (encoded !== undefined && encoded.length <= 16_384) return { preview: `{${count} properties}`, raw: encoded };
+      const encoded = stringifyWithinLimit(value);
+      if (encoded !== undefined) return { preview: `{${count} properties}`, raw: encoded };
     }
     return { preview: `{${count} properties}` };
   }
   if (type === 'array') {
     const count = (value as unknown[]).length;
     if (includeContainerRaw && count <= 32 && exactNumbers.size === 0) {
-      const encoded = JSON.stringify(value);
-      if (encoded !== undefined && encoded.length <= 16_384) return { preview: `[${count} items]`, raw: encoded };
+      const encoded = stringifyWithinLimit(value);
+      if (encoded !== undefined) return { preview: `[${count} items]`, raw: encoded };
     }
     return { preview: `[${count} items]` };
   }
@@ -180,6 +245,9 @@ function previewForValue(value: unknown, pointer: string, exactNumbers: Readonly
 }
 
 export class JsonEngine {
+  private readonly keyCache = new Map<object, string[]>();
+  private keyCacheBytes = 0;
+
   private constructor(
     private readonly root: unknown,
     private readonly exactNumbers: ReadonlyMap<string, string>,
@@ -187,6 +255,29 @@ export class JsonEngine {
     private readonly sourceText?: string,
     private readonly sourceOffset = 0,
   ) {}
+
+  private keysFor(value: object): string[] {
+    const existing = this.keyCache.get(value);
+    if (existing) {
+      this.keyCache.delete(value);
+      this.keyCache.set(value, existing);
+      return existing;
+    }
+    const keys = Object.keys(value);
+    const estimatedBytes = keys.length * 16;
+    if (keys.length >= KEY_CACHE_MIN_KEYS && estimatedBytes <= KEY_CACHE_MAX_ENTRY_BYTES) {
+      this.keyCache.set(value, keys);
+      this.keyCacheBytes += estimatedBytes;
+      while (this.keyCacheBytes > KEY_CACHE_MAX_BYTES && this.keyCache.size > 1) {
+        const oldestKey = this.keyCache.keys().next().value;
+        if (oldestKey === undefined) break;
+        const oldest = this.keyCache.get(oldestKey);
+        this.keyCache.delete(oldestKey);
+        this.keyCacheBytes -= (oldest?.length ?? 0) * 16;
+      }
+    }
+    return keys;
+  }
 
   static parse(input: string, retainSource = false): JsonEngine {
     const sourceOffset = input.charCodeAt(0) === 0xfeff ? 1 : 0;
@@ -205,17 +296,35 @@ export class JsonEngine {
   location(pointer: string): JsonSourceLocation {
     if (this.sourceText === undefined) throw new PreviewError('LOCATION_UNAVAILABLE', 'Exact source location is available for editable files only.');
     pathFromPointer(pointer);
+    if (pointer === '') return { offset: this.sourceOffset };
+    const targetParent = parentPointer(pointer) ?? '';
     const found = Symbol('found');
+    const containers: string[] = [];
     let offset: number | undefined;
     const check = (candidateOffset: number, path: readonly (string | number)[]): void => {
       if (pointerFromPath(path) !== pointer) return;
+      // JSON.parse keeps the last value for duplicate object keys. Keep the
+      // matching source location in lockstep so “Open source” reveals the
+      // value the tree actually displays.
       offset = candidateOffset + this.sourceOffset;
-      throw found;
+    };
+    const beginContainer = (candidateOffset: number, path: readonly (string | number)[]): void => {
+      const containerPointer = pointerFromPath(path);
+      check(candidateOffset, path);
+      containers.push(containerPointer);
+    };
+    const endContainer = (): void => {
+      const containerPointer = containers.pop();
+      // Once the target's parent closes, no later duplicate key can refer to
+      // this pointer, so stop without scanning the rest of a large document.
+      if (containerPointer === targetParent && offset !== undefined) throw found;
     };
     try {
       visit(this.sourceText, {
-        onObjectBegin: (candidateOffset, _length, _line, _character, getPath) => check(candidateOffset, getPath()),
-        onArrayBegin: (candidateOffset, _length, _line, _character, getPath) => check(candidateOffset, getPath()),
+        onObjectBegin: (candidateOffset, _length, _line, _character, getPath) => beginContainer(candidateOffset, getPath()),
+        onObjectEnd: () => endContainer(),
+        onArrayBegin: (candidateOffset, _length, _line, _character, getPath) => beginContainer(candidateOffset, getPath()),
+        onArrayEnd: () => endContainer(),
         onLiteralValue: (_value, candidateOffset, _length, _line, _character, getPath) => check(candidateOffset, getPath()),
       });
     } catch (error) {
@@ -225,12 +334,10 @@ export class JsonEngine {
     return { offset };
   }
 
-  summary(pointer = '', key = 'JSON', includeContainerRaw = true): TreeNodeSummary {
-    const value = valueAtPointer(this.root, pointer);
-    if (value === undefined && pointer !== '') throw new PreviewError('POINTER_NOT_FOUND', `JSON Pointer does not exist: ${pointer}`);
+  private summaryValue(value: unknown, pointer: string, key: string, includeContainerRaw = true): TreeNodeSummary {
     const type = jsonValueType(value);
-    const childCount = type === 'array' ? (value as unknown[]).length : type === 'object' ? Object.keys(value as object).length : 0;
-    const preview = previewForValue(value, pointer, this.exactNumbers, includeContainerRaw);
+    const childCount = type === 'array' ? (value as unknown[]).length : type === 'object' ? this.keysFor(value as object).length : 0;
+    const preview = previewForValue(value, pointer, this.exactNumbers, includeContainerRaw, childCount);
     return {
       pointer,
       key,
@@ -240,6 +347,12 @@ export class JsonEngine {
       childCount,
       hasChildren: childCount > 0,
     };
+  }
+
+  summary(pointer = '', key = 'JSON', includeContainerRaw = true): TreeNodeSummary {
+    const value = valueAtPointer(this.root, pointer);
+    if (value === undefined && pointer !== '') throw new PreviewError('POINTER_NOT_FOUND', `JSON Pointer does not exist: ${pointer}`);
+    return this.summaryValue(value, pointer, key, includeContainerRaw);
   }
 
   children(pointer: string, offset: number, requestedLimit: number): TreeChildrenResult {
@@ -252,18 +365,18 @@ export class JsonEngine {
     if (Array.isArray(value)) {
       total = value.length;
       for (let index = safeOffset; index < Math.min(total, safeOffset + limit); index++) {
-        children.push(this.summary(joinPointer(pointer, index), String(index)));
+        children.push(this.summaryValue(value[index], joinPointer(pointer, index), String(index)));
       }
     } else if (value !== null && typeof value === 'object') {
-      const keys = Object.keys(value);
+      const keys = this.keysFor(value);
       total = keys.length;
       for (const key of keys.slice(safeOffset, safeOffset + limit)) {
-        children.push(this.summary(joinPointer(pointer, key), key));
+        children.push(this.summaryValue((value as Record<string, unknown>)[key], joinPointer(pointer, key), key));
       }
     }
     return fitTreeChildrenResult({
       parentPointer: pointer,
-      parent: this.summary(pointer, pointer === '' ? 'JSON' : pointer.slice(pointer.lastIndexOf('/') + 1)),
+      parent: this.summaryValue(value, pointer, pointer === '' ? 'JSON' : pointer.slice(pointer.lastIndexOf('/') + 1)),
       offset: safeOffset,
       total,
       children,
@@ -277,14 +390,16 @@ export class JsonEngine {
     if (segment === undefined) throw new PreviewError('POINTER_NOT_FOUND', 'The root node has no parent page.');
     let index = -1;
     if (Array.isArray(value) && /^\d+$/.test(segment)) index = Number(segment);
-    else if (value !== null && typeof value === 'object') index = Object.keys(value).indexOf(segment);
+    else if (value !== null && typeof value === 'object') index = this.keysFor(value).indexOf(segment);
     if (!Number.isSafeInteger(index) || index < 0) throw new PreviewError('POINTER_NOT_FOUND', `JSON Pointer does not exist: ${childPointer}`);
     const limit = Math.min(200, Math.max(1, Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 200));
     return this.children(parent, Math.floor(index / limit) * limit, limit);
   }
 
   async search(query: string, limit: number, cancelled: () => boolean): Promise<TreeSearchResult> {
-    const normalized = query.trim().toLocaleLowerCase();
+    // Locale-independent folding is deterministic across local and remote
+    // extension hosts and avoids the heavier locale lookup in this hot loop.
+    const normalized = query.trim().toLowerCase();
     if (!normalized) return { matches: [], truncated: false, visited: 0 };
     const maximum = Math.min(10_000, Math.max(1, Number.isFinite(limit) ? Math.floor(limit) : 1_000));
     const matches: TreeSearchMatch[] = [];
@@ -299,8 +414,8 @@ export class JsonEngine {
       }
       const current = stack.pop()!;
       visited++;
-      const summary = this.summary(current.pointer, current.key, false);
-      if (`${current.key}\n${summary.preview}`.toLocaleLowerCase().includes(normalized)) {
+      const summary = this.summaryValue(current.value, current.pointer, current.key, false);
+      if (`${current.key}\n${summary.preview}`.toLowerCase().includes(normalized)) {
         const match = { pointer: summary.pointer, key: summary.key, type: summary.type, preview: summary.preview };
         const matchBytes = serializedBytes(match) + 1;
         if (matchPayloadBytes + matchBytes > MAX_TREE_MESSAGE_BYTES) return { matches, truncated: true, visited };
@@ -314,7 +429,7 @@ export class JsonEngine {
         }
       } else if (current.value !== null && typeof current.value === 'object') {
         const object = current.value as Record<string, unknown>;
-        const keys = Object.keys(object);
+        const keys = this.keysFor(object);
         for (let index = keys.length - 1; index >= 0; index--) {
           const key = keys[index]!;
           stack.push({ value: object[key], pointer: joinPointer(current.pointer, key), key });

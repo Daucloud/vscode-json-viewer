@@ -28,6 +28,12 @@
   "extensionKind": [
     "workspace"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true,
+      "description": "Fast JSON Viewer only reads and parses document contents; it does not execute workspace code."
+    }
+  },
   "activationEvents": [
     "onCustomEditor:fastJsonViewer.json",
     "onCustomEditor:fastJsonViewer.jsonl",

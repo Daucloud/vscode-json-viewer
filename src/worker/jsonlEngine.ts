@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, open, stat, unlink, type FileHandle } from 'node:fs/promises';
+import { mkdir, open, unlink, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { TextDecoder } from 'node:util';
-import { valueAtPointer } from '../shared/pointer.js';
+import { pathFromPointer, valueAtPointer } from '../shared/pointer.js';
 import type {
   IndexReadyEvent,
   JsonlOpenResult,
@@ -20,7 +20,7 @@ import type {
 import type { WorkerSource } from './protocol.js';
 import { PreviewError } from './errors.js';
 import { collectUnsafeIntegers, JsonEngine } from './jsonEngine.js';
-import { compareSortValues, flattenForTable, matchesStructuredFilter } from './filter.js';
+import { compactSortValue, compareSortValues, flattenForTable, matchesStructuredFilter } from './filter.js';
 import { computeFileSignature, DiskLineIndex, type LineRecord } from './lineIndex.js';
 import { ResultIndex, ResultIndexWriter, type ResultRecord } from './resultIndex.js';
 
@@ -34,6 +34,8 @@ const MAX_CELL_CHARS = 4_096;
 const MAX_ROW_MESSAGE_BYTES = 3_500;
 const MAX_INITIAL_PAYLOAD_BYTES = 700 * 1024;
 const RESULT_PREFIX = 'query-';
+const TREE_CACHE_MAX_ENTRIES = 8;
+const TREE_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 const UTF8_ENCODER = new TextEncoder();
 const EMPTY_EXACT_NUMBERS: ReadonlyMap<string, string> = new Map();
 
@@ -63,6 +65,11 @@ interface ScannedLine {
 interface SortableRecord extends ResultRecord {
   value: unknown;
   exact?: string;
+}
+
+interface TreeCacheEntry {
+  engine: JsonEngine;
+  sourceBytes: number;
 }
 
 type EventSink = (event: WorkerEvent) => void;
@@ -170,8 +177,13 @@ function hasQuery(spec: JsonlQuerySpec): boolean {
   return Boolean(spec.text || spec.filter || spec.sort);
 }
 
-function needsExactNumbers(spec: JsonlQuerySpec): boolean {
-  return Boolean(spec.sort || spec.filter?.op === 'compare' && spec.filter.value.kind === 'number');
+function validateQueryPointers(spec: JsonlQuerySpec): void {
+  try {
+    if (spec.filter) pathFromPointer(spec.filter.pointer);
+    if (spec.sort) pathFromPointer(spec.sort.pointer);
+  } catch (error) {
+    throw new PreviewError('INVALID_POINTER', error instanceof Error ? error.message : 'Enter a valid JSON Pointer.');
+  }
 }
 
 function serializedBytes(value: unknown): number {
@@ -183,7 +195,7 @@ function safeQueryText(raw: string, spec: JsonlQuerySpec, normalizedQuery?: stri
   if (!spec.text) return true;
   return spec.caseSensitive
     ? raw.includes(spec.text)
-    : raw.toLocaleLowerCase().includes(normalizedQuery ?? spec.text.toLocaleLowerCase());
+    : raw.toLowerCase().includes(normalizedQuery ?? spec.text.toLowerCase());
 }
 
 function shortenCell(value: string, maximum = MAX_CELL_CHARS): string {
@@ -240,12 +252,17 @@ export class JsonlEngine {
   private indexPromise?: Promise<DiskLineIndex>;
   private indexError?: unknown;
   private initialRows: JsonlRow[] = [];
+  private sampledRows = 0;
   private readonly fields: string[] = [];
   private readonly fieldSet = new Set<string>();
   private readonly results = new Map<string, ResultIndex>();
-  private readonly treeCache = new Map<number, JsonEngine>();
+  private readonly activeResultPaths = new Set<string>();
+  private readonly treeCache = new Map<number, TreeCacheEntry>();
+  private treeCacheBytes = 0;
   private readWindow?: { start: number; bytes: Uint8Array };
   private closed = false;
+  private sourceInvalid = false;
+  private queryGeneration = 0;
 
   private constructor(
     readonly sessionId: string,
@@ -305,6 +322,7 @@ export class JsonlEngine {
       const metadataPath = join(this.cacheDirectory, `${token}.session.meta.json`);
       const started = performance.now();
       this.index = await DiskLineIndex.buildBuffer(this.source.bytes, indexPath, metadataPath, () => undefined, cancelled);
+      await this.discoverFieldsFromIndex(cancelled);
       return {
         kind: 'jsonl',
         fields: [...this.fields],
@@ -425,6 +443,7 @@ export class JsonlEngine {
       const row = await this.readRow(records[index]!, index + 1, true);
       if (index < this.settings.pageSize) rows.push(row);
     }
+    this.sampledRows = Math.max(this.sampledRows, records.length);
     const fittedRows: JsonlRow[] = [];
     let initialPayloadBytes = serializedBytes({ fields: this.fields, rows: [] });
     for (const row of rows) {
@@ -448,20 +467,44 @@ export class JsonlEngine {
   private async discoverFieldsFromIndex(cancelled: () => boolean): Promise<void> {
     const index = await this.awaitIndex();
     const count = Math.min(index.lineCount, this.settings.schemaSampleRows);
-    for (let position = 0; position < count && this.fields.length < 200; position++) {
+    for (let position = Math.min(this.sampledRows, count); position < count && this.fields.length < 200; position++) {
       if ((position & 127) === 0 && cancelled()) return;
       const record = await index.get(position);
       await this.readRow(record, position + 1, true);
+      this.sampledRows = position + 1;
     }
   }
 
   private async assertSourceUnchanged(): Promise<void> {
     if (this.source.type !== 'file') return;
-    const current = await stat(this.source.path);
-    const expected = this.source.signature;
-    if (current.size !== expected.size || current.mtimeMs !== expected.mtimeMs || (expected.dev !== undefined && current.dev !== expected.dev) || (expected.ino !== undefined && current.ino !== expected.ino)) {
-      throw new PreviewError('SOURCE_CHANGED', 'The source file changed. Refresh the viewer before continuing.');
+    if (this.sourceInvalid) throw new PreviewError('SOURCE_CHANGED', 'The source file changed. Refresh the viewer before continuing.');
+    try {
+      // A stat-only check misses editors that replace bytes in place while
+      // preserving size and timestamp. Reuse the same edge fingerprint used by
+      // the persistent index so every page/query observes a consistent source.
+      const signature = await computeFileSignature(this.source.path, this.source.signature);
+      this.source = { ...this.source, signature };
+    } catch (error) {
+      this.sourceInvalid = true;
+      throw error;
     }
+  }
+
+  /**
+   * Return files that must not be evicted while this session is alive.  The
+   * cache pruner runs globally in the worker, so protecting only the index
+   * that just finished could otherwise remove another open viewer's query or
+   * line index underneath its file handle.
+   */
+  cachePaths(): ReadonlySet<string> {
+    const paths = new Set<string>();
+    if (this.source.type === 'file') {
+      paths.add(join(this.cacheDirectory, `${this.cacheKey}.lines.idx`));
+      paths.add(join(this.cacheDirectory, `${this.cacheKey}.lines.meta.json`));
+    }
+    for (const result of this.results.values()) paths.add(result.path);
+    for (const path of this.activeResultPaths) paths.add(path);
+    return paths;
   }
 
   private async bytes(start: number, length: number): Promise<Uint8Array> {
@@ -485,7 +528,7 @@ export class JsonlEngine {
     caseSensitive: boolean,
     cancelled: () => boolean,
   ): Promise<boolean> {
-    const normalizedQuery = caseSensitive ? query : query.toLocaleLowerCase();
+    const normalizedQuery = caseSensitive ? query : query.toLowerCase();
     if (!normalizedQuery) return true;
     const decoder = new TextDecoder('utf-8');
     const chunkBytes = 1024 * 1024;
@@ -500,7 +543,7 @@ export class JsonlEngine {
       cursor += source.byteLength;
       const decoded = decoder.decode(source, { stream: cursor < length });
       const candidate = `${carry}${decoded}`;
-      const searchable = caseSensitive ? candidate : candidate.toLocaleLowerCase();
+      const searchable = caseSensitive ? candidate : candidate.toLowerCase();
       if (searchable.includes(normalizedQuery)) return true;
       carry = candidate.slice(-overlap);
       if ((cursor & ((8 * chunkBytes) - 1)) === 0) await new Promise<void>((resolve) => setImmediate(resolve));
@@ -600,7 +643,10 @@ export class JsonlEngine {
   }
 
   async query(queryId: string, spec: JsonlQuerySpec, requestId: string, cancelled: () => boolean): Promise<JsonlQueryResult> {
-    const index = await this.awaitIndex(cancelled);
+    const generation = ++this.queryGeneration;
+    const queryCancelled = (): boolean => this.closed || generation !== this.queryGeneration || cancelled();
+    validateQueryPointers(spec);
+    const index = await this.awaitIndex(queryCancelled);
     await this.assertSourceUnchanged();
     if (!hasQuery(spec)) return { queryId: 'default', scannedRows: 0, matchedRows: index.lineCount, elapsedMs: 0 };
     if (spec.sort && index.lineCount > this.settings.sortMaxRows && !spec.filter && !spec.text) {
@@ -613,12 +659,12 @@ export class JsonlEngine {
     }
     const resultPath = join(this.cacheDirectory, `${RESULT_PREFIX}${this.sessionId}-${randomUUID()}.bin`);
     const writer = await ResultIndexWriter.create(resultPath);
+    this.activeResultPaths.add(resultPath);
     const sortable: SortableRecord[] | undefined = spec.sort ? [] : undefined;
     const started = performance.now();
     let matches = 0;
     let scannedRows = 0;
-    const exact = needsExactNumbers(spec);
-    const normalizedTextQuery = spec.text && !spec.caseSensitive ? spec.text.toLocaleLowerCase() : undefined;
+    const normalizedTextQuery = spec.text && !spec.caseSensitive ? spec.text.toLowerCase() : undefined;
     const strictDecoder = new TextDecoder('utf-8', { fatal: true });
     try {
       await scanLines(
@@ -629,7 +675,7 @@ export class JsonlEngine {
           if (line.tooLarge) {
             if (!spec.text || spec.filter || spec.sort) return;
             return (async (): Promise<void> => {
-              if (!await this.lineContainsText(line.start, line.contentLength, spec.text!, Boolean(spec.caseSensitive), cancelled)) return;
+                if (!await this.lineContainsText(line.start, line.contentLength, spec.text!, Boolean(spec.caseSensitive), queryCancelled)) return;
               matches++;
               const flush = writer.append({ physicalLine: line.physicalLine, sourceStart: line.start });
               if (flush) await flush;
@@ -646,7 +692,12 @@ export class JsonlEngine {
           if (spec.filter || spec.sort) {
             try {
               value = JSON.parse(raw) as unknown;
-              if (exact) exactNumbers = collectUnsafeIntegers(raw);
+              const targets = new Set<string>();
+              if (spec.filter?.op === 'compare' && spec.filter.value.kind === 'number') targets.add(spec.filter.pointer);
+              const sortValue = spec.sort ? valueAtPointer(value, spec.sort.pointer) : undefined;
+              if (spec.sort && typeof sortValue === 'number') targets.add(spec.sort.pointer);
+              if (targets.size === 1) exactNumbers = collectUnsafeIntegers(raw, targets.values().next().value as string);
+              else if (targets.size > 1) exactNumbers = collectUnsafeIntegers(raw);
             } catch {
               return;
             }
@@ -661,7 +712,7 @@ export class JsonlEngine {
             const exactValue = exactNumbers.get(spec.sort.pointer);
             sortable.push({
               ...record,
-              value: valueAtPointer(value, spec.sort.pointer),
+              value: compactSortValue(valueAtPointer(value, spec.sort.pointer)),
               ...(exactValue !== undefined ? { exact: exactValue } : {}),
             });
           } else {
@@ -675,18 +726,22 @@ export class JsonlEngine {
           };
           this.emitEvent(event);
         },
-        cancelled,
+        queryCancelled,
       );
       if (sortable && spec.sort) {
         const direction = spec.sort.direction === 'asc' ? 1 : -1;
         sortable.sort((left, right) => direction * (compareSortValues(left.value, right.value, left.exact, right.exact) || left.physicalLine - right.physicalLine));
-        for (const item of sortable) {
+        for (let position = 0; position < sortable.length; position++) {
+          if ((position & 4095) === 0 && queryCancelled()) throw new PreviewError('CANCELLED', 'Query cancelled.');
+          const item = sortable[position]!;
           const flush = writer.append(item);
           if (flush) await flush;
         }
       }
+      if (queryCancelled()) throw new PreviewError('CANCELLED', 'Query cancelled.');
       await this.assertSourceUnchanged();
       const result = await writer.finish();
+      this.activeResultPaths.delete(resultPath);
       this.results.set(queryId, result);
       while (this.results.size > 8) {
         const oldest = this.results.entries().next().value as [string, ResultIndex] | undefined;
@@ -696,6 +751,7 @@ export class JsonlEngine {
       }
       return { queryId, scannedRows, matchedRows: result.count, elapsedMs: performance.now() - started };
     } catch (error) {
+      this.activeResultPaths.delete(resultPath);
       await writer.abort();
       throw error;
     }
@@ -703,7 +759,13 @@ export class JsonlEngine {
 
   async treeChildren(physicalLine: number, pointer: string, offset: number, limit: number, cancelled: () => boolean = () => false): Promise<TreeChildrenResult> {
     await this.assertSourceUnchanged();
-    let tree = this.treeCache.get(physicalLine);
+    let cached = this.treeCache.get(physicalLine);
+    let tree = cached?.engine;
+    if (cached) {
+      // Promote the entry to the MRU end of the insertion-ordered map.
+      this.treeCache.delete(physicalLine);
+      this.treeCache.set(physicalLine, cached);
+    }
     if (!tree) {
       const index = await this.awaitIndex(cancelled);
       const record = await index.get(physicalLine - 1);
@@ -711,8 +773,20 @@ export class JsonlEngine {
       let raw = new TextDecoder('utf-8', { fatal: true }).decode(await this.bytes(record.start, record.contentLength));
       if (physicalLine === 1 && raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
       tree = JsonEngine.parse(raw);
-      this.treeCache.set(physicalLine, tree);
-      while (this.treeCache.size > 8) this.treeCache.delete(this.treeCache.keys().next().value!);
+      // Do not retain a single record larger than the whole cache budget;
+      // keeping it transient is safer than pinning a 100+ MB object graph.
+      if (record.contentLength <= TREE_CACHE_MAX_BYTES) {
+        cached = { engine: tree, sourceBytes: record.contentLength };
+        this.treeCache.set(physicalLine, cached);
+        this.treeCacheBytes += cached.sourceBytes;
+        while ((this.treeCache.size > TREE_CACHE_MAX_ENTRIES || this.treeCacheBytes > TREE_CACHE_MAX_BYTES) && this.treeCache.size > 1) {
+          const oldestKey = this.treeCache.keys().next().value;
+          if (oldestKey === undefined) break;
+          const oldest = this.treeCache.get(oldestKey);
+          this.treeCache.delete(oldestKey);
+          this.treeCacheBytes -= oldest?.sourceBytes ?? 0;
+        }
+      }
     }
     const result = tree.children(pointer, offset, limit);
     await this.assertSourceUnchanged();
@@ -722,9 +796,11 @@ export class JsonlEngine {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.queryGeneration++;
     await Promise.all([...this.results.values()].map((result) => result.close()));
     this.results.clear();
     this.treeCache.clear();
+    this.treeCacheBytes = 0;
     if (this.index) await this.index.close();
     if (this.source.type === 'file') await this.source.handle.close();
   }

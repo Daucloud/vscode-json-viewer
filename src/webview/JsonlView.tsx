@@ -12,7 +12,7 @@ import type {
   WorkerEvent,
 } from '../shared/types.js';
 import type { ViewerEdit } from '../shared/webviewProtocol.js';
-import { api } from './api.js';
+import { api, RequestError } from './api.js';
 import { Icon } from './Icons.js';
 import { ResizableSplit } from './ResizableSplit.js';
 import { TreeExplorer } from './Tree.js';
@@ -52,6 +52,10 @@ function cellClass(value: unknown): string {
   return '';
 }
 
+function hasQueryDraft(text: string, pointer: string, operation: string, sortPointer: string): boolean {
+  return Boolean(text.trim() || (pointer.trim() && operation !== 'none') || sortPointer.trim());
+}
+
 export function JsonlView({
   result,
   editable,
@@ -76,6 +80,7 @@ export function JsonlView({
   const [error, setError] = useState<string>();
   const [progress, setProgress] = useState<{ task: string; ratio: number; records: number; matches?: number }>();
   const [runningRequest, setRunningRequest] = useState<string>();
+  const runningRequestRef = useRef<string | undefined>(undefined);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>(persisted.columnWidths ?? {});
   const [textQuery, setTextQuery] = useState(persisted.queryText ?? '');
   const [filterPointer, setFilterPointer] = useState(persisted.filterPointer ?? '');
@@ -83,9 +88,24 @@ export function JsonlView({
   const [filterValue, setFilterValue] = useState(persisted.filterValue ?? '');
   const [sortPointer, setSortPointer] = useState(persisted.sortPointer ?? '');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>(persisted.sortDirection ?? 'asc');
+  const [queryNeedsRun, setQueryNeedsRun] = useState(() => hasQueryDraft(
+    persisted.queryText ?? '', persisted.filterPointer ?? '', persisted.filterOperation ?? 'none', persisted.sortPointer ?? '',
+  ));
   const loadingPages = useRef(new Set<string>());
+  const rowTreeRequest = useRef<string | undefined>(undefined);
+  const selectionGeneration = useRef(0);
+  const queryGeneration = useRef(0);
+  const rowNavigationGeneration = useRef(0);
+  const rowRefs = useRef(new Map<number, HTMLDivElement>());
+  const pendingRowFocus = useRef<number | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingScrollTop = useRef(persisted.tableScrollTop);
+
+  const cancelRowTreeRequest = useCallback((): void => {
+    const request = rowTreeRequest.current;
+    rowTreeRequest.current = undefined;
+    if (request) void api.request({ type: 'cancel', targetRequestId: request }).catch(() => undefined);
+  }, []);
 
   useEffect(() => { queryIdRef.current = queryId; }, [queryId]);
   useEffect(() => {
@@ -100,15 +120,29 @@ export function JsonlView({
     return () => window.cancelAnimationFrame(frame);
   }, [indexReady, total]);
   useEffect(() => {
+    queryGeneration.current++;
+    selectionGeneration.current++;
+    if (runningRequestRef.current) void api.request({ type: 'cancel', targetRequestId: runningRequestRef.current }).catch(() => undefined);
+    cancelRowTreeRequest();
+    runningRequestRef.current = undefined;
+    rowTreeRequest.current = undefined;
+    loadingPages.current.clear();
+    rowNavigationGeneration.current++;
+    setRunningRequest(undefined);
+    setRowTreeLoading(false);
+    setProgress(undefined);
     setFields(result.fields);
     setRows(new Map(result.initialRows.map((row, index) => [index, row])));
     setTotal(result.recordCount ?? result.initialRows.length);
     setIndexReady(result.indexReady);
     setQueryId('default');
     queryIdRef.current = 'default';
+    setQueryNeedsRun(hasQueryDraft(
+      api.state().queryText ?? '', api.state().filterPointer ?? '', api.state().filterOperation ?? 'none', api.state().sortPointer ?? '',
+    ));
     setSelected(undefined);
     setRowRoot(undefined);
-  }, [result]);
+  }, [cancelRowTreeRequest, result]);
 
   useEffect(() => {
     if (!workerEvent) return;
@@ -118,6 +152,7 @@ export function JsonlView({
       setFields(workerEvent.fields);
       setProgress(undefined);
     } else if (workerEvent.event === 'progress') {
+      if (workerEvent.task === 'query' && workerEvent.requestId !== runningRequestRef.current) return;
       setProgress({
         task: workerEvent.task,
         ratio: workerEvent.totalBytes > 0 ? workerEvent.scannedBytes / workerEvent.totalBytes : 0,
@@ -150,7 +185,9 @@ export function JsonlView({
       });
       return response;
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      if (!(caught instanceof RequestError && caught.failure.code === 'CANCELLED')) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
     } finally {
       loadingPages.current.delete(key);
     }
@@ -184,25 +221,87 @@ export function JsonlView({
   useEffect(() => { horizontal.measure(); }, [columnWidths, horizontal]);
 
   const selectRow = async (row: JsonlRow): Promise<void> => {
+    selectionGeneration.current++;
+    cancelRowTreeRequest();
     setSelected(row);
     api.updateState({ selectedPhysicalLine: row.physicalLine });
     setRowRoot(undefined);
-    if (row.status !== 'valid') return;
-    setRowTreeLoading(true);
-    try {
-      const root = await api.request<TreeChildrenResult>({ type: 'jsonl/treeChildren', physicalLine: row.physicalLine, pointer: '', offset: 0, limit: 200 });
-      setRowRoot(root);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
+    if (row.status !== 'valid') {
       setRowTreeLoading(false);
+      return;
+    }
+    setRowTreeLoading(true);
+    const operation = api.requestWithId<TreeChildrenResult>({ type: 'jsonl/treeChildren', physicalLine: row.physicalLine, pointer: '', offset: 0, limit: 200 });
+    rowTreeRequest.current = operation.requestId;
+    try {
+      const root = await operation.promise;
+      if (rowTreeRequest.current === operation.requestId) setRowRoot(root);
+    } catch (caught) {
+      if (rowTreeRequest.current === operation.requestId && !(caught instanceof RequestError && caught.failure.code === 'CANCELLED')) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    } finally {
+      if (rowTreeRequest.current === operation.requestId) {
+        rowTreeRequest.current = undefined;
+        setRowTreeLoading(false);
+      }
     }
   };
+
+  const focusRowAfterRender = useCallback((index: number): void => {
+    pendingRowFocus.current = index;
+    vertical.scrollToIndex(index, { align: 'auto' });
+  }, [vertical]);
+
+  const rowAt = useCallback(async (index: number, query = queryIdRef.current): Promise<JsonlRow | undefined> => {
+    if (index < 0) return undefined;
+    const existing = rows.get(index);
+    if (existing) return existing;
+    const page = await loadPage(index, query);
+    if (!page || page.queryId !== query || queryIdRef.current !== query) return undefined;
+    return page.rows.find((_row, offset) => page.offset + offset === index);
+  }, [loadPage, rows]);
+
+  const handleTableKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>, index: number, row: JsonlRow | undefined): void => {
+    if (!row) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      void selectRow(row);
+      return;
+    }
+    let target: number | undefined;
+    if (event.key === 'ArrowDown') target = Math.min(total - 1, index + 1);
+    else if (event.key === 'ArrowUp') target = Math.max(0, index - 1);
+    else if (event.key === 'PageDown') target = Math.min(total - 1, index + Math.max(1, visibleRows.length - 1));
+    else if (event.key === 'PageUp') target = Math.max(0, index - Math.max(1, visibleRows.length - 1));
+    else if (event.key === 'Home') target = 0;
+    else if (event.key === 'End') target = Math.max(0, total - 1);
+    if (target === undefined || target === index || total <= 0) return;
+    event.preventDefault();
+    const generation = ++rowNavigationGeneration.current;
+    void rowAt(target).then((next) => {
+      if (rowNavigationGeneration.current !== generation || !next) return;
+      focusRowAfterRender(target);
+      void selectRow(next);
+    });
+  }, [focusRowAfterRender, rowAt, selectRow, total, visibleRows.length]);
+
+  useEffect(() => {
+    const index = pendingRowFocus.current;
+    if (index === undefined) return;
+    const frame = window.requestAnimationFrame(() => {
+      rowRefs.current.get(index)?.focus();
+      if (rowRefs.current.has(index)) pendingRowFocus.current = undefined;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [rows, selected, total]);
 
   useEffect(() => {
     const physicalLine = api.state().selectedPhysicalLine;
     if (!physicalLine) return;
+    const generation = selectionGeneration.current;
     void loadPage(physicalLine - 1, 'default').then((page) => {
+      if (selectionGeneration.current !== generation) return;
       const row = page?.rows.find((candidate) => candidate.physicalLine === physicalLine);
       if (row) void selectRow(row);
     });
@@ -231,13 +330,22 @@ export function JsonlView({
   };
 
   const runQuery = async (): Promise<void> => {
+    const generation = ++queryGeneration.current;
+    const previousRequest = runningRequestRef.current;
+    if (previousRequest) void api.request({ type: 'cancel', targetRequestId: previousRequest }).catch(() => undefined);
+    runningRequestRef.current = undefined;
+    cancelRowTreeRequest();
+    selectionGeneration.current++;
+    setRowTreeLoading(false);
     setError(undefined);
     const nextId = crypto.randomUUID();
     const operation = api.requestWithId<JsonlQueryResult>({ type: 'jsonl/query', queryId: nextId, spec: buildSpec() });
+    runningRequestRef.current = operation.requestId;
     setRunningRequest(operation.requestId);
     api.updateState({ queryText: textQuery, filterPointer, filterOperation, filterValue, sortPointer, sortDirection });
     try {
       const response = await operation.promise;
+      if (queryGeneration.current !== generation) return;
       const effectiveId = response.queryId;
       queryIdRef.current = effectiveId;
       setQueryId(effectiveId);
@@ -245,27 +353,49 @@ export function JsonlView({
       setTotal(response.matchedRows);
       setSelected(undefined);
       setRowRoot(undefined);
+      setQueryNeedsRun(false);
       await loadPage(0, effectiveId);
       setProgress(undefined);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      if (queryGeneration.current === generation && !(caught instanceof RequestError && caught.failure.code === 'CANCELLED')) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
     } finally {
-      setRunningRequest(undefined);
+      if (queryGeneration.current === generation) {
+        runningRequestRef.current = undefined;
+        setRunningRequest(undefined);
+      }
     }
   };
 
   const resetQuery = async (): Promise<void> => {
+    queryGeneration.current++;
+    const requestToCancel = runningRequestRef.current;
+    if (requestToCancel) void api.request({ type: 'cancel', targetRequestId: requestToCancel }).catch(() => undefined);
+    runningRequestRef.current = undefined;
+    cancelRowTreeRequest();
+    selectionGeneration.current++;
+    rowNavigationGeneration.current++;
+    setRunningRequest(undefined);
+    setProgress(undefined);
     setTextQuery(''); setFilterPointer(''); setFilterOperation('none'); setFilterValue(''); setSortPointer('');
+    setQueryNeedsRun(false);
     api.updateState({ queryText: '', filterPointer: '', filterOperation: 'none', filterValue: '', sortPointer: '' });
     queryIdRef.current = 'default';
     setQueryId('default');
+    loadingPages.current.clear();
     setRows(new Map(result.initialRows.map((row, index) => [index, row])));
     setTotal(result.recordCount ?? result.initialRows.length);
+    setSelected(undefined);
+    setRowRoot(undefined);
+    setRowTreeLoading(false);
     await loadPage(0, 'default');
   };
 
   const resizeColumn = (field: string, event: React.PointerEvent): void => {
     event.preventDefault();
+    event.stopPropagation();
+    const resizeHandle = event.currentTarget;
     const startX = event.clientX;
     const initial = columnWidths[field] ?? 180;
     let finalWidth = initial;
@@ -276,10 +406,34 @@ export function JsonlView({
     const up = (): void => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      if (resizeHandle instanceof HTMLElement && resizeHandle.hasPointerCapture(event.pointerId)) {
+        resizeHandle.releasePointerCapture(event.pointerId);
+      }
       api.updateState({ columnWidths: { ...(api.state().columnWidths ?? {}), [field]: finalWidth } });
     };
+    if (resizeHandle instanceof HTMLElement && resizeHandle.setPointerCapture) {
+      try { resizeHandle.setPointerCapture(event.pointerId); } catch { /* Pointer capture is optional in older webviews. */ }
+    }
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up, { once: true });
+    window.addEventListener('pointercancel', up, { once: true });
+  };
+
+  const resizeColumnByKeyboard = (field: string, event: React.KeyboardEvent<HTMLSpanElement>): void => {
+    const current = columnWidths[field] ?? 180;
+    const step = event.shiftKey ? 40 : 8;
+    let next: number | undefined;
+    if (event.key === 'ArrowLeft') next = current - step;
+    else if (event.key === 'ArrowRight') next = current + step;
+    else if (event.key === 'Home') next = 80;
+    else if (event.key === 'End') next = 800;
+    if (next === undefined) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const width = Math.max(80, Math.min(800, next));
+    setColumnWidths((previous) => ({ ...previous, [field]: width }));
+    api.updateState({ columnWidths: { ...(api.state().columnWidths ?? {}), [field]: width } });
   };
 
   const tableWidth = LINE_COLUMN_WIDTH + horizontal.getTotalSize();
@@ -292,18 +446,18 @@ export function JsonlView({
   return <div className="document-view jsonl-view">
     <section className="query-panel" aria-label="JSONL query controls">
       <div className="query-primary">
-        <label className="query-control query-search">
-          <span className="control-label">Search records</span>
-          <div className="input-with-icon"><Icon name="search" /><input aria-label="Full-text search" placeholder="Text in raw lines" value={textQuery} onChange={(event) => setTextQuery(event.target.value)} /></div>
+          <label className="query-control query-search">
+            <span className="control-label">Search records</span>
+          <div className="input-with-icon"><Icon name="search" /><input aria-label="Full-text search" placeholder="Text in raw lines" value={textQuery} onChange={(event) => { setTextQuery(event.target.value); setQueryNeedsRun(true); }} onKeyDown={(event) => { if (event.key === 'Enter' && !runningRequest) { event.preventDefault(); void runQuery(); } }} /></div>
         </label>
         <label className="query-control query-field">
           <span className="control-label">Field pointer</span>
-          <div className="input-with-icon"><Icon name="filter" /><input list="jsonl-fields" aria-label="Filter field JSON Pointer" placeholder="e.g. /user/id" value={filterPointer} onChange={(event) => setFilterPointer(event.target.value)} /></div>
+          <div className="input-with-icon"><Icon name="filter" /><input list="jsonl-fields" aria-label="Filter field JSON Pointer" placeholder="e.g. /user/id" value={filterPointer} onChange={(event) => { setFilterPointer(event.target.value); setQueryNeedsRun(true); }} onKeyDown={(event) => { if (event.key === 'Enter' && !runningRequest) { event.preventDefault(); void runQuery(); } }} /></div>
         </label>
         <datalist id="jsonl-fields">{fields.map((field) => <option value={field} key={field} />)}</datalist>
         <label className="query-control query-operation">
           <span className="control-label">Condition</span>
-          <select aria-label="Filter operation" value={filterOperation} onChange={(event) => setFilterOperation(event.target.value)}>
+          <select aria-label="Filter operation" value={filterOperation} onChange={(event) => { setFilterOperation(event.target.value); setQueryNeedsRun(true); }}>
             <option value="none">No filter</option><option value="eq">Equals</option><option value="ne">Not equal</option>
             <option value="contains">Contains</option><option value="gt">Greater than</option><option value="gte">At least</option>
             <option value="lt">Less than</option><option value="lte">At most</option><option value="exists">Exists</option><option value="isNull">Is null</option>
@@ -311,7 +465,7 @@ export function JsonlView({
         </label>
         <label className="query-control query-value">
           <span className="control-label">Value</span>
-          <input aria-label="Filter value" placeholder="Value to match" disabled={filterOperation === 'none' || filterOperation === 'exists' || filterOperation === 'isNull'} value={filterValue} onChange={(event) => setFilterValue(event.target.value)} />
+          <input aria-label="Filter value" placeholder="Value to match" disabled={filterOperation === 'none' || filterOperation === 'exists' || filterOperation === 'isNull'} value={filterValue} onChange={(event) => { setFilterValue(event.target.value); setQueryNeedsRun(true); }} onKeyDown={(event) => { if (event.key === 'Enter' && !runningRequest) { event.preventDefault(); void runQuery(); } }} />
         </label>
         <div className="query-run">
           <span className="control-label" aria-hidden="true">Query</span>
@@ -321,10 +475,10 @@ export function JsonlView({
       <div className="query-secondary">
         <div className="sort-controls">
           <span className="inline-control-label"><Icon name="sort" />Sort</span>
-          <select aria-label="Sort field" value={sortPointer} onChange={(event) => setSortPointer(event.target.value)}>
+          <select aria-label="Sort field" value={sortPointer} onChange={(event) => { setSortPointer(event.target.value); setQueryNeedsRun(true); }}>
             <option value="">No field selected</option>{fields.map((field) => <option value={field} key={field}>{field}</option>)}
           </select>
-          <select aria-label="Sort direction" disabled={!sortPointer} value={sortDirection} onChange={(event) => setSortDirection(event.target.value as 'asc' | 'desc')}><option value="asc">Ascending</option><option value="desc">Descending</option></select>
+          <select aria-label="Sort direction" disabled={!sortPointer} value={sortDirection} onChange={(event) => { setSortDirection(event.target.value as 'asc' | 'desc'); setQueryNeedsRun(true); }}><option value="asc">Ascending</option><option value="desc">Descending</option></select>
         </div>
         <span className="spacer" />
         {runningRequest && <button className="ghost-button" onClick={() => void api.request({ type: 'cancel', targetRequestId: runningRequest })}><Icon name="close" />Cancel scan</button>}
@@ -355,25 +509,30 @@ export function JsonlView({
           <span className="summary-title"><Icon name="table" /><strong>{total.toLocaleString()}</strong> records</span>
           <span className="summary-divider" />
           <span>{fields.length.toLocaleString()} sampled fields</span>
-          <span className={`query-status ${queryId === 'default' ? '' : 'active'}`}>{queryId === 'default' ? 'All records' : 'Filtered result'}</span>
+          <span className={`query-status ${queryId === 'default' ? '' : 'active'}${queryNeedsRun ? ' pending' : ''}`} title={queryNeedsRun ? 'The controls contain changes that are not applied yet.' : undefined}>{queryNeedsRun ? 'Query ready · run to apply' : queryId === 'default' ? 'All records' : 'Filtered result'}</span>
           <span className="spacer" />
           <span className={`index-state ${indexReady ? 'ready' : ''}`}><span className="status-orb" />{indexReady ? 'Indexed' : 'Indexing'}</span>
         </div>
-        <div className="table-scroll" ref={scrollRef} onScroll={(event) => api.updateState({ tableScrollTop: event.currentTarget.scrollTop })}>
+        <div className="table-scroll" ref={scrollRef} role="grid" aria-label="JSONL records" aria-rowcount={total + 1} aria-colcount={fields.length + 1} aria-busy={!indexReady || Boolean(runningRequest)} onScroll={(event) => api.updateState({ tableScrollTop: event.currentTarget.scrollTop })}>
           <div className="table-space" style={{ width: tableWidth, height: vertical.getTotalSize() + HEADER_HEIGHT }}>
-            <div className="table-header" style={{ width: tableWidth, height: HEADER_HEIGHT }}>
-              <div className="line-cell header-cell" style={{ width: LINE_COLUMN_WIDTH }}><span>Line</span></div>
+            <div className="table-header" role="row" aria-rowindex={1} style={{ width: tableWidth, height: HEADER_HEIGHT }}>
+              <div className="line-cell header-cell" role="columnheader" style={{ width: LINE_COLUMN_WIDTH }}><span>Line</span></div>
               {columnItems.map((column) => {
                 const field = fields[column.index]!;
-                return <div className="header-cell field-cell" key={column.key} title={field} style={{ left: LINE_COLUMN_WIDTH + column.start, width: column.size }}>
-                  <span>{field}</span><span className="column-resizer" onPointerDown={(event) => resizeColumn(field, event)} />
+                return <div className="header-cell field-cell" role="columnheader" key={column.key} title={field} style={{ left: LINE_COLUMN_WIDTH + column.start, width: column.size }}>
+                  <span>{field}</span><span className="column-resizer" role="separator" aria-orientation="vertical" aria-label={`Resize ${field} column`} tabIndex={0}
+                    onPointerDown={(event) => resizeColumn(field, event)} onKeyDown={(event) => resizeColumnByKeyboard(field, event)} />
                 </div>;
               })}
             </div>
             {visibleRows.map((item) => {
               const row = rows.get(item.index);
-              return <div role="row" tabIndex={row ? 0 : -1} key={item.key} className={rowClass(row, row?.physicalLine === selected?.physicalLine)}
+              return <div role="row" aria-rowindex={item.index + 2} aria-selected={row?.physicalLine === selected?.physicalLine} tabIndex={row ? (row.physicalLine === selected?.physicalLine || !selected ? 0 : -1) : -1} ref={(element) => {
+                  if (element) rowRefs.current.set(item.index, element);
+                  else rowRefs.current.delete(item.index);
+                }} key={item.key} className={rowClass(row, row?.physicalLine === selected?.physicalLine)}
                 style={{ transform: `translateY(${item.start + HEADER_HEIGHT}px)`, height: item.size, width: tableWidth }}
+                onKeyDown={(event) => handleTableKeyDown(event, item.index, row)}
                 onClick={() => { if (row) void selectRow(row); }}>
                 <div className="line-cell" style={{ width: LINE_COLUMN_WIDTH }} title={row?.diagnostic?.message}>{row ? <>{row.status !== 'valid' && <Icon name="warning" size={13} />}<span>{row.physicalLine}</span></> : <span className="cell-skeleton" />}</div>
                 {columnItems.map((column) => {
