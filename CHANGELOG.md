@@ -1,27 +1,47 @@
-# Change Log
+# 更新日志
 
-## 0.1.0
+本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的组织方式，版本号遵循语义化版本规范。
 
-- Initial release with lazy JSON trees, streaming JSONL/NDJSON tables, disk-backed indexes and small-file editing.
-- Added persistent, keyboard-accessible splitters for JSONL table/details and tree/Inspector panes.
-- Made Inspector path/value copying resilient across webview and extension-host clipboard implementations, with visible result feedback.
-- Added a bounded **Expand all** action for JSON trees so normal documents can be fully opened without materializing unsafe large branches.
-- Hardened external-change detection with source-size checks and first/last-block fingerprints, including lazy JSON requests after the initial parse.
-- Kept indexes and temporary query result files of active JSONL sessions out of the global LRU eviction pass.
-- Made client-side cancellation reject immediately while the worker finishes its cooperative cleanup in the background.
-- Bounded the JSONL detail-tree cache by both entry count and source bytes to keep large-record browsing within the memory budget.
-- Limited exact-number scans during JSONL queries to the requested sort/filter pointers.
-- Added a bounded large-object key-list cache to speed repeated JSON tree paging without unbounded memory growth.
-- Cancelled superseded JSONL scans per session and protected in-progress result files from cache eviction.
-- Added a pre-save conflict check so local viewer edits cannot silently overwrite an externally changed file.
-- Prevented inline-copy probing from serializing huge narrow JSON containers, and covered that shape in the 100 MB benchmark.
-- Declared support for untrusted workspaces so read-only viewing works safely without requiring folder trust.
-- Normalized persisted split positions against the actual editor width; keyboard accessibility values now match the visible JSONL/Inspector and JSON tree panes.
-- Added roving keyboard navigation for JSON trees and JSONL records (arrows, Home/End, page movement, Enter/Space) plus accessible column-resize handles.
-- Added a cancellable **Expand all** operation and removed an O(n²) queue walk from depth expansion.
-- Cancelled stale JSONL row-detail requests during query changes/reset, and clearly marks restored or edited query controls as pending until they are run.
-- Added a fast lexical guard for ordinary JSON numbers so JSONL filtering avoids a full numeric-literal visitor on every row; exact large-number preservation remains enabled when needed.
-- Kept JSON/JSONL view components mounted across edits and refreshes, cancelling stale searches while avoiding unnecessary full UI remounts and preserving draft controls.
-- Routed fire-and-forget toolbar actions through a visible error channel so failed saves, source reveals, and undo/redo operations no longer disappear as unhandled Webview rejections.
-- Added a lightweight Worker-side edge-fingerprint monitor for remote Workspace files so in-flight indexing and queries stop after an external source change.
-- Added a dedicated high-contrast Marketplace icon that remains legible at VS Code activity-bar and extension-list sizes.
+## Unreleased
+
+暂无已发布变更。
+
+## 0.1.0 — 2026-07-28
+
+首个可发布版本：提供 JSON 懒加载树、流式 JSONL/NDJSON 表格，以及小文件编辑能力。
+
+### 产品能力
+
+- 新增 JSON 懒加载树、Inspector、JSON Pointer、源码定位和小文件编辑。
+- 新增 JSONL/NDJSON 虚拟表格、单行 JSON 详情树、字段采样、全文搜索、JSON Pointer 过滤和结果排序。
+- 新增磁盘行索引与临时查询结果索引，支持大文件分页浏览、进度展示和取消。
+- 新增按文件大小自动选择可编辑、只读懒加载和安全文本预览模式。
+- 支持 UTF-8 BOM、LF/CRLF、末行无换行、空行、非法 JSONL 单行、超长记录、多字节字符和不安全整数原始字面量。
+
+### 性能与可靠性
+
+- 将解析、索引、过滤、搜索和排序放入隔离 Worker，并设置 V8 内存上限；Worker 异常只影响当前预览。
+- 通过源文件大小、mtime、inode（可用时）以及首尾块指纹检测外部修改，避免使用过期树或索引。
+- 远程 Workspace 文件在索引和查询期间持续检查边界指纹；源文件变化后立即取消旧任务并提示刷新。
+- JSONL 索引采用分块存储和变长编码，内存只保留稀疏检查点及有限解码块。
+- 查询命中写入临时磁盘索引，不在内存保留全部结果；活动会话索引不会被全局 LRU 提前驱逐。
+- 将 JSONL 详情树、对象键列表和大对象数据纳入有上限的 LRU，避免重复请求和无界增长。
+- 取消操作先在客户端立即返回，再让 Worker 协作清理；切换查询时会取消过期行详情请求。
+- 保存前再次校验磁盘版本，外部修改时拒绝覆盖；本地文件使用同目录临时文件、同步和原子替换。
+- 针对常见 JSON 数字增加快速词法路径，仅在需要时进行精确大整数比较，减少字段过滤成本。
+
+### 交互与可访问性
+
+- 新增可控范围的 **Expand all**，并支持取消长时间展开；保留 Collapse all 和按深度展开。
+- JSON 树、JSONL 表格/详情和 Inspector 分隔条支持拖动、双击复位和键盘微调。
+- 增加 JSON 树与 JSONL 记录的方向键、Home/End、PageUp/PageDown、Enter/Space 导航。
+- 增加可访问的列宽调整手柄、明确的复制成功/失败反馈和统一的操作错误提示。
+- 切换编辑器、刷新和查询时保留展开路径、选中行、列宽、过滤条件及滚动位置，不使用 `retainContextWhenHidden`。
+- 增加高对比度 Marketplace 图标，并声明支持不受信任工作区的只读查看。
+
+### 测试与发布工程
+
+- 增加 JSON Pointer、懒子树分页、行索引编码、跨块换行、BOM、坏行、超长记录、过滤、大整数和缓存失效测试。
+- 增加 VS Code 集成测试，覆盖编辑、撤销/重做、保存、备份、大文件只读、外部修改、查询取消、Worker 崩溃降级和状态恢复。
+- 增加 100 MiB JSON/JSONL 与 10 GiB JSONL 性能基准及 CI 门禁。
+- 完善扩展品牌资源、MIT 许可证、VSIX 打包脚本和 Marketplace 元数据。
