@@ -369,7 +369,7 @@ export class ViewerDocument implements vscode.CustomDocument {
       sessionId: this.sessionId,
       uri: this.uri.toString(),
       name: basename(this.uri.path) || this.uri.toString(),
-      kind: this.kind,
+      kind: openResult?.kind ?? this.kind,
       mode,
       editable: mode === 'editable',
       fileSize,
@@ -408,7 +408,7 @@ export class ViewerDocument implements vscode.CustomDocument {
 
   private setBootstrapResult(result: SessionOpenResult): void {
     const { openResult: _old, dirty: _dirty, ...base } = this.bootstrapValue;
-    this.bootstrapValue = { ...base, openResult: result, ...(this.dirty ? { dirty: true } : {}) };
+    this.bootstrapValue = { ...base, kind: result.kind, openResult: result, ...(this.dirty ? { dirty: true } : {}) };
     this.bootstrapEmitter.fire(this.bootstrapValue);
   }
 

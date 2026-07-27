@@ -32,10 +32,12 @@ export async function run(): Promise<void> {
     const jsonUri = vscode.Uri.file(join(directory, 'small.json'));
     const largeJsonUri = vscode.Uri.file(join(directory, 'large.json'));
     const jsonlUri = vscode.Uri.file(join(directory, 'records.jsonl'));
+    const singleRecordJsonlUri = vscode.Uri.file(join(directory, 'single-record.jsonl'));
     const invalidJsonlUri = vscode.Uri.file(join(directory, 'invalid-utf8.jsonl'));
     await writeFile(jsonUri.fsPath, '{"name":"Ada","items":[1,2,3]}');
     await writeFile(largeJsonUri.fsPath, `{"payload":"${'x'.repeat(11 * 1024 * 1024)}"}`);
     await writeFile(jsonlUri.fsPath, '{"id":1,"ok":true}\nnot-json\n{"id":2,"ok":false}\n');
+    await writeFile(singleRecordJsonlUri.fsPath, '{"profile":{"name":"Ada","active":true}}\n');
     await writeFile(invalidJsonlUri.fsPath, Buffer.concat([Buffer.from('{"id":"'), Buffer.from([0xff]), Buffer.from('"}\n{"id":2}\n')]));
 
     await vscode.commands.executeCommand('vscode.openWith', jsonUri, 'fastJsonViewer.json');
@@ -122,6 +124,31 @@ export async function run(): Promise<void> {
     } finally {
       invalidDocument.dispose();
       invalidCancellation.dispose();
+    }
+
+    const singleRecordCancellation = new vscode.CancellationTokenSource();
+    const singleRecordDocument = await ViewerDocument.open(
+      singleRecordJsonlUri,
+      'jsonl',
+      extension.extensionUri,
+      join(directory, 'single-record-cache'),
+      undefined,
+      singleRecordCancellation.token,
+    );
+    try {
+      assert.equal(singleRecordDocument.bootstrap.kind, 'json');
+      assert.equal(singleRecordDocument.bootstrap.openResult?.kind, 'json');
+      assert.equal(singleRecordDocument.isEditable, true);
+      const children = await singleRecordDocument.workerRequest({ type: 'json/children', pointer: '', offset: 0, limit: 20 }, 'single-record');
+      assert.ok('children' in children);
+      assert.equal(children.children[0]?.key, 'profile');
+      await singleRecordDocument.applyEdit({ kind: 'set', path: ['profile', 'active'], value: false });
+      const profile = await singleRecordDocument.workerRequest({ type: 'json/children', pointer: '/profile', offset: 0, limit: 20 }, 'single-record-edited');
+      assert.ok('children' in profile);
+      assert.equal(profile.children.find((node) => node.key === 'active')?.raw, 'false');
+    } finally {
+      singleRecordDocument.dispose();
+      singleRecordCancellation.dispose();
     }
 
     const largeCancellation = new vscode.CancellationTokenSource();
