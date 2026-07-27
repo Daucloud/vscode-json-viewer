@@ -263,6 +263,8 @@ export class JsonlEngine {
   private closed = false;
   private sourceInvalid = false;
   private queryGeneration = 0;
+  private sourcePollTimer: NodeJS.Timeout | undefined;
+  private sourcePollInFlight = false;
 
   private constructor(
     readonly sessionId: string,
@@ -292,6 +294,7 @@ export class JsonlEngine {
       const signature = await computeFileSignature(source.path, source.signature);
       this.source = { type: 'file', path: source.path, signature, handle: await open(source.path, 'r') };
       this.sourceBytes = signature.size;
+      this.startSourceMonitor();
     } else {
       const bytes = new TextEncoder().encode(source.text);
       this.source = { type: 'text', bytes };
@@ -299,6 +302,7 @@ export class JsonlEngine {
     }
 
     await this.loadInitialRows(cancelled);
+    await this.assertSourceUnchanged();
     if (this.source.type === 'file') {
       const indexPath = join(this.cacheDirectory, `${this.cacheKey}.lines.idx`);
       const metadataPath = join(this.cacheDirectory, `${this.cacheKey}.lines.meta.json`);
@@ -336,6 +340,37 @@ export class JsonlEngine {
     return { kind: 'jsonl', fields: [...this.fields], initialRows: this.initialRows, indexReady: false };
   }
 
+  /**
+   * A desktop file watcher normally invalidates the document from the
+   * extension host. Remote workspace providers do not always surface a
+   * watcher event, so keep a very small edge-fingerprint monitor in the
+   * worker as a second line of defense. It never reads the complete source.
+   */
+  private startSourceMonitor(): void {
+    if (this.source.type !== 'file' || this.sourcePollTimer) return;
+    this.sourcePollTimer = setInterval(() => {
+      if (this.closed || this.sourceInvalid || this.sourcePollInFlight || this.source.type !== 'file') return;
+      this.sourcePollInFlight = true;
+      const source = this.source;
+      void computeFileSignature(source.path, source.signature).then((signature) => {
+        if (!this.closed && !this.sourceInvalid && this.source === source) this.source = { ...source, signature };
+      }).catch((error: unknown) => {
+        if (this.closed || this.sourceInvalid) return;
+        this.sourceInvalid = true;
+        this.queryGeneration++;
+        this.emitEvent({
+          event: 'warning',
+          sessionId: this.sessionId,
+          code: 'SOURCE_CHANGED',
+          message: error instanceof Error ? error.message : 'The source file changed. Refresh the viewer.',
+        });
+      }).finally(() => {
+        this.sourcePollInFlight = false;
+      });
+    }, 500);
+    this.sourcePollTimer.unref?.();
+  }
+
   private startBackgroundIndex(indexPath: string, metadataPath: string, cancelled: () => boolean): void {
     if (this.source.type !== 'file') return;
     const source = this.source;
@@ -348,7 +383,7 @@ export class JsonlEngine {
       (scannedBytes, records) => this.emitEvent({
         event: 'progress', sessionId: this.sessionId, task: 'index', scannedBytes, totalBytes: this.sourceBytes, records,
       }),
-      () => this.closed || cancelled(),
+      () => this.closed || this.sourceInvalid || cancelled(),
     );
     void this.indexPromise.then(async (index) => {
       if (this.closed) {
@@ -371,7 +406,15 @@ export class JsonlEngine {
       if (stale) await stale.close().catch(() => undefined);
       await Promise.all([unlink(indexPath).catch(() => undefined), unlink(metadataPath).catch(() => undefined)]);
       this.indexError = error;
-      if (!this.closed) this.emitEvent({ event: 'warning', sessionId: this.sessionId, code: 'INDEX_FAILED', message: error instanceof Error ? error.message : String(error) });
+      if (!this.closed) {
+        const sourceChanged = this.sourceInvalid || (error instanceof PreviewError && error.code === 'SOURCE_CHANGED');
+        this.emitEvent({
+          event: 'warning',
+          sessionId: this.sessionId,
+          code: sourceChanged ? 'SOURCE_CHANGED' : 'INDEX_FAILED',
+          message: sourceChanged ? 'The source file changed. Refresh the viewer before continuing.' : error instanceof Error ? error.message : String(error),
+        });
+      }
     });
   }
 
@@ -606,18 +649,19 @@ export class JsonlEngine {
 
   async page(queryId: string, offset: number, requestedLimit: number, cancelled: () => boolean = () => false): Promise<JsonlPageResult> {
     await this.assertSourceUnchanged();
+    const pageCancelled = (): boolean => this.sourceInvalid || cancelled();
     const safeOffset = Number.isSafeInteger(offset) ? Math.max(0, offset) : 0;
     const limit = Math.min(this.settings.pageSize, Math.max(1, Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : this.settings.pageSize));
     if (queryId === 'default' && !this.index && safeOffset < this.initialRows.length && safeOffset + limit <= this.initialRows.length) {
       return { queryId, offset: safeOffset, total: this.initialRows.length, rows: this.initialRows.slice(safeOffset, safeOffset + limit) };
     }
-    const index = await this.awaitIndex(cancelled);
+    const index = await this.awaitIndex(pageCancelled);
     const records: ResultRecord[] = [];
     let total: number;
     if (queryId === 'default') {
       total = index.lineCount;
       for (let position = safeOffset; position < Math.min(total, safeOffset + limit); position++) {
-        if ((position & 31) === 0 && cancelled()) throw new PreviewError('CANCELLED', 'Page request cancelled.');
+        if ((position & 31) === 0 && pageCancelled()) throw new PreviewError('CANCELLED', 'Page request cancelled.');
         const line = await index.get(position);
         records.push({ physicalLine: line.physicalLine, sourceStart: line.start });
       }
@@ -630,7 +674,7 @@ export class JsonlEngine {
     const rows: JsonlRow[] = [];
     let messageBytes = 0;
     for (let position = 0; position < records.length; position++) {
-      if ((position & 15) === 0 && cancelled()) throw new PreviewError('CANCELLED', 'Page request cancelled.');
+      if ((position & 15) === 0 && pageCancelled()) throw new PreviewError('CANCELLED', 'Page request cancelled.');
       const record = await index.get(records[position]!.physicalLine - 1);
       const row = fitRowMessage(await this.readRow(record, safeOffset + position + 1, false));
       const size = serializedBytes(row);
@@ -644,7 +688,7 @@ export class JsonlEngine {
 
   async query(queryId: string, spec: JsonlQuerySpec, requestId: string, cancelled: () => boolean): Promise<JsonlQueryResult> {
     const generation = ++this.queryGeneration;
-    const queryCancelled = (): boolean => this.closed || generation !== this.queryGeneration || cancelled();
+    const queryCancelled = (): boolean => this.closed || this.sourceInvalid || generation !== this.queryGeneration || cancelled();
     validateQueryPointers(spec);
     const index = await this.awaitIndex(queryCancelled);
     await this.assertSourceUnchanged();
@@ -767,7 +811,7 @@ export class JsonlEngine {
       this.treeCache.set(physicalLine, cached);
     }
     if (!tree) {
-      const index = await this.awaitIndex(cancelled);
+      const index = await this.awaitIndex(() => this.sourceInvalid || cancelled());
       const record = await index.get(physicalLine - 1);
       if (record.contentLength > this.settings.maxLineBytes) throw new PreviewError('LINE_TOO_LARGE', 'This record is too large for the tree inspector.');
       let raw = new TextDecoder('utf-8', { fatal: true }).decode(await this.bytes(record.start, record.contentLength));
@@ -797,6 +841,10 @@ export class JsonlEngine {
     if (this.closed) return;
     this.closed = true;
     this.queryGeneration++;
+    if (this.sourcePollTimer) {
+      clearInterval(this.sourcePollTimer);
+      this.sourcePollTimer = undefined;
+    }
     await Promise.all([...this.results.values()].map((result) => result.close()));
     this.results.clear();
     this.treeCache.clear();

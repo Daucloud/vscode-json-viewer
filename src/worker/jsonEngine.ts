@@ -25,6 +25,46 @@ const KEY_CACHE_MAX_ENTRY_BYTES = 8 * 1024 * 1024;
 // false negative would risk losing an exact numeric lexeme.
 const MAYBE_UNSAFE_NUMBER = /[+-]?(?:(?:\d{16,})(?:\.\d*)?|(?:\d+\.\d{16,}))(?:[eE][+-]?\d+)?|[+-]?\d+[eE][+-]?\d+/;
 
+function containsPotentialUnsafeNumber(text: string): boolean {
+  if (!MAYBE_UNSAFE_NUMBER.test(text)) return false;
+  let inString = false;
+  for (let index = 0; index < text.length; index++) {
+    const character = text.charCodeAt(index);
+    if (inString) {
+      if (character === 0x5c) index++;
+      else if (character === 0x22) inString = false;
+      continue;
+    }
+    if (character === 0x22) {
+      inString = true;
+      continue;
+    }
+    if (character !== 0x2d && (character < 0x30 || character > 0x39)) continue;
+    let cursor = index;
+    if (text.charCodeAt(cursor) === 0x2d) cursor++;
+    const integerStart = cursor;
+    while (cursor < text.length && text.charCodeAt(cursor) >= 0x30 && text.charCodeAt(cursor) <= 0x39) cursor++;
+    const integerDigits = cursor - integerStart;
+    let fractionDigits = 0;
+    if (text.charCodeAt(cursor) === 0x2e) {
+      cursor++;
+      const fractionStart = cursor;
+      while (cursor < text.length && text.charCodeAt(cursor) >= 0x30 && text.charCodeAt(cursor) <= 0x39) cursor++;
+      fractionDigits = cursor - fractionStart;
+    }
+    let exponent = false;
+    if (text.charCodeAt(cursor) === 0x65 || text.charCodeAt(cursor) === 0x45) {
+      exponent = true;
+      cursor++;
+      if (text.charCodeAt(cursor) === 0x2b || text.charCodeAt(cursor) === 0x2d) cursor++;
+      while (cursor < text.length && text.charCodeAt(cursor) >= 0x30 && text.charCodeAt(cursor) <= 0x39) cursor++;
+    }
+    if (exponent || integerDigits >= 16 || fractionDigits >= 16) return true;
+    index = Math.max(index, cursor - 1);
+  }
+  return false;
+}
+
 function truncate(value: string, length = MAX_PREVIEW): string {
   return value.length <= length ? value : `${value.slice(0, length)}…`;
 }
@@ -174,7 +214,7 @@ function isUnsafeIntegerLiteral(raw: string): boolean {
 
 export function collectUnsafeIntegers(text: string, targetPointer?: string): Map<string, string> {
   const result = new Map<string, string>();
-  if (!MAYBE_UNSAFE_NUMBER.test(text)) return result;
+  if (!containsPotentialUnsafeNumber(text)) return result;
   visit(text, {
     onLiteralValue(value, offset, length, _line, _character, getPath) {
       if (typeof value !== 'number') return;

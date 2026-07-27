@@ -104,6 +104,37 @@ describe('JsonlEngine', () => {
     await opened.engine.close();
   });
 
+  it('detects file changes in the background without waiting for another page request', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'fast-jsonl-source-monitor-'));
+    temporaryDirectories.push(directory);
+    const sourcePath = join(directory, 'records.jsonl');
+    await writeFile(sourcePath, '{"id":1}\n{"id":2}\n');
+    const details = await stat(sourcePath);
+    const events: WorkerEvent[] = [];
+    const opened = await JsonlEngine.open(
+      'monitor-session',
+      { type: 'file', path: sourcePath, signature: { size: details.size, mtimeMs: details.mtimeMs } },
+      { ...DEFAULT_SETTINGS, pageSize: 20, schemaSampleRows: 20 },
+      join(directory, 'cache'),
+      'monitor',
+      (event) => events.push(event),
+      () => false,
+    );
+    const indexDeadline = Date.now() + 2_000;
+    while (!events.some((event) => event.event === 'indexReady') && Date.now() < indexDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(events.some((event) => event.event === 'indexReady')).toBe(true);
+    events.length = 0;
+    await writeFile(sourcePath, '{"id":9}\n{"id":2}\n');
+    const deadline = Date.now() + 2_500;
+    while (!events.some((event) => event.event === 'warning' && event.code === 'SOURCE_CHANGED') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'warning', code: 'SOURCE_CHANGED' })]));
+    await opened.engine.close();
+  });
+
   it('filters exact unsafe integers and stores matches in a disk result index', async () => {
     const opened = await openText([
       '{"id":900719925474099312345,"name":"first"}',

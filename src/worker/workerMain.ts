@@ -27,6 +27,8 @@ interface JsonSession {
   settings: Extract<WorkerRequestBody, { type: 'session/open' }>['settings'];
   cacheDirectory: string;
   cacheKey: string;
+  sourcePollTimer: NodeJS.Timeout | undefined;
+  sourcePollInFlight: boolean;
 }
 
 interface JsonlSession {
@@ -130,7 +132,31 @@ async function assertJsonSourceUnchanged(session: JsonSession): Promise<void> {
 }
 
 async function closeSession(session: Session | undefined): Promise<void> {
+  if (session?.kind === 'json' && session.sourcePollTimer) {
+    clearInterval(session.sourcePollTimer);
+    session.sourcePollTimer = undefined;
+  }
   if (session?.kind === 'jsonl') await session.engine.close();
+}
+
+/** Keep remote JSON sessions responsive to replacements that do not emit a
+ * workspace file-watcher event. Only the first/last 64 KiB are fingerprinted.
+ */
+function startJsonSourceMonitor(session: JsonSession): void {
+  if (session.source.type !== 'file' || session.sourcePollTimer) return;
+  session.sourcePollTimer = setInterval(() => {
+    if (session.sourceInvalid || session.sourcePollInFlight || session.source.type !== 'file') return;
+    session.sourcePollInFlight = true;
+    const source = session.source;
+    void computeFileSignature(source.path, source.signature).then((signature) => {
+      if (!session.sourceInvalid && session.source === source) session.source = { ...source, signature };
+    }).catch(() => {
+      session.sourceInvalid = true;
+    }).finally(() => {
+      session.sourcePollInFlight = false;
+    });
+  }, 500);
+  session.sourcePollTimer.unref?.();
 }
 
 async function openSession(
@@ -144,7 +170,7 @@ async function openSession(
   if (request.kind === 'json') {
     const loaded = await readStrictUtf8(request.source);
     const engine = JsonEngine.parse(loaded.text, loaded.source.type === 'text');
-    sessions.set(request.sessionId, {
+    const session: JsonSession = {
       kind: 'json',
       engine,
       source: loaded.source,
@@ -152,7 +178,11 @@ async function openSession(
       settings: request.settings,
       cacheDirectory: request.cacheDirectory,
       cacheKey: request.cacheKey,
-    });
+      sourcePollTimer: undefined,
+      sourcePollInFlight: false,
+    };
+    sessions.set(request.sessionId, session);
+    startJsonSourceMonitor(session);
     return { kind: 'json', root: engine.summary(), parseMilliseconds: engine.parseMilliseconds };
   }
 
@@ -296,7 +326,15 @@ async function dispatch(request: WorkerRequest): Promise<WorkerResponseData> {
       {
         const session = getJsonSession(request.sessionId);
         await assertJsonSourceUnchanged(session);
-        const result = await session.engine.search(request.query, request.limit, cancelled(request.requestId));
+        const requestCancelled = cancelled(request.requestId);
+        let result;
+        try {
+          result = await session.engine.search(request.query, request.limit, () => requestCancelled() || session.sourceInvalid);
+        } catch (error) {
+          if (session.sourceInvalid) throw new PreviewError('SOURCE_CHANGED', 'The source file changed. Refresh the viewer before continuing.');
+          throw error;
+        }
+        if (session.sourceInvalid) throw new PreviewError('SOURCE_CHANGED', 'The source file changed. Refresh the viewer before continuing.');
         await assertJsonSourceUnchanged(session);
         return result;
       }

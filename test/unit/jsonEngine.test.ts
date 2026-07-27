@@ -42,6 +42,12 @@ describe('JsonEngine', () => {
     expect(values.has('/safe')).toBe(false);
   });
 
+  it('does not treat long digit strings as numeric lexemes', () => {
+    const values = collectUnsafeIntegers('{"text":"900719925474099312345","value":900719925474099312345}');
+    expect(values.has('/text')).toBe(false);
+    expect(values.get('/value')).toBe('900719925474099312345');
+  });
+
   it('can collect one exact number without retaining other numeric lexemes', () => {
     const values = collectUnsafeIntegers('{"first":900719925474099312345,"target":900719925474099312346}', '/target');
     expect([...values.keys()]).toEqual(['/target']);
