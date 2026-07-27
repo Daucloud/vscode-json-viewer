@@ -74,7 +74,7 @@ npm run benchmark
 npm run benchmark:10gb
 ```
 
-100 MiB 基准用于每次候选版本检查；10 GiB 基准适合本地或定期运行。记录机器、Node 版本、文件形状和结果，不要直接比较不同硬件上的绝对时间。
+100 MiB 基准用于每次候选版本检查；本地吞吐目标为 `100 MB/s` 以上，GitHub 共享 runner 使用 `70 MB/s` 的抗抖动下限。10 GiB 基准适合本地或定期运行。记录机器、Node 版本、文件形状和结果，不要直接比较不同硬件上的绝对时间。
 
 ## 5. Marketplace 发布
 
