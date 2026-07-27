@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-- 扩展版本：`0.1.1`
+- 扩展版本：`0.2.0`
 - 包名：`vscode-json-viewer`
 - Publisher：`daucloud`
 - 许可证：MIT
@@ -35,8 +35,8 @@ npm run package
 `npm run package` 会再次执行类型检查、单元测试、构建，并调用 `vsce package --no-dependencies` 生成 VSIX。也可以将产物写入临时目录，避免污染仓库：
 
 ```bash
-npx vsce package --no-dependencies --out /tmp/fast-json-viewer-0.1.1.vsix
-unzip -l /tmp/fast-json-viewer-0.1.1.vsix
+npx vsce package --no-dependencies --out /tmp/fast-json-viewer-0.2.0.vsix
+unzip -l /tmp/fast-json-viewer-0.2.0.vsix
 ```
 
 核对 VSIX 内容时应看到：
@@ -52,7 +52,7 @@ unzip -l /tmp/fast-json-viewer-0.1.1.vsix
 在干净的 VS Code Profile 或 Extension Development Host 中安装 VSIX：
 
 ```bash
-code --install-extension /tmp/fast-json-viewer-0.1.1.vsix
+code --install-extension /tmp/fast-json-viewer-0.2.0.vsix
 ```
 
 至少验证以下路径：
@@ -106,8 +106,8 @@ Marketplace 不允许重复发布同一版本号。若要先做预发布验证�
 待 Marketplace 冒烟测试通过后，再考虑：
 
 ```bash
-git tag -a v0.1.1 -m "Release v0.1.1"
-git push origin v0.1.1
+git tag -a v0.2.0 -m "Release v0.2.0"
+git push origin v0.2.0
 ```
 
 GitHub Release 可附上与 Marketplace 相同的 VSIX 和变更摘要。推送前确认远端仓库、分支保护、作者信息和许可证显示正确。

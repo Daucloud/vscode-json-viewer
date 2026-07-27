@@ -49,7 +49,7 @@ Only visible tree nodes stay mounted. The Inspector shows the selected value's J
 
 ![JSONL virtual table and row Inspector](media/readme-jsonl-table.jpg)
 
-The table is virtualized both vertically and horizontally. Select a record to explore its complete structure in a JSON-style tree. Both the table/detail split and the tree/Inspector split are resizable.
+The table is virtualized both vertically and horizontally. Select a record to explore its complete structure in a JSON-style tree. The Selected record pane starts with a generous 38% share, can be maximized without losing tree state, and both nested splits remain freely resizable.
 
 ## Features
 
@@ -68,7 +68,8 @@ The table is virtualized both vertically and horizontally. Select a record to ex
 - Virtualized table with schema sampling, resizable columns, keyboard navigation, and restored scroll position, while keeping the mounted DOM small.
 - Full-text search over raw records and JSON Pointer field filters for equality, inequality, containment, comparison, existence, and null checks.
 - Writes query matches to a temporary disk index for paging, progress reporting, and cancellation instead of keeping every result in memory.
-- Opens any selected record as a complete JSON tree. Invalid JSON records are highlighted individually and never block surrounding data.
+- Opens any selected record as a complete JSON tree. Maximize the Selected record pane for focused inspection, press `Esc` to restore the table, and keep expanded branches intact while resizing.
+- Opens a valid single-record JSONL/NDJSON file directly as a regular JSON tree; malformed single records remain isolated in the JSONL diagnostic view.
 - Large files are read-only and never loaded wholesale into the extension host or Webview. If the source changes externally, stale indexing stops immediately and the viewer asks to refresh.
 
 ### Automatic file-size modes
@@ -104,10 +105,10 @@ npm ci
 npm run package
 ```
 
-Install the generated `vscode-json-viewer-0.1.1.vsix` (use the actual output version), or run:
+Install the generated `vscode-json-viewer-0.2.0.vsix` (use the actual output version), or run:
 
 ```bash
-code --install-extension ./vscode-json-viewer-0.1.1.vsix
+code --install-extension ./vscode-json-viewer-0.2.0.vsix
 ```
 
 ### Open a file

@@ -49,7 +49,7 @@ Fast JSON & JSONL Viewer 是一个为真实数据文件设计的 VS Code 查看�
 
 ![JSONL virtual table and row Inspector](media/readme-jsonl-table.jpg)
 
-表格同时支持纵向和横向虚拟化。点击记录后，右侧可以像 JSON Viewer 一样展开该行的完整结构；表格/详情和树/Inspector 分隔条都可以拖动。
+表格同时支持纵向和横向虚拟化。点击记录后，右侧可以像 JSON Viewer 一样展开该行的完整结构；Selected record 默认占 38% 宽度，可在不丢失树状态的情况下最大化，并且两层分隔条都能在更大范围内自由拖动。
 
 ## 核心能力
 
@@ -68,7 +68,8 @@ Fast JSON & JSONL Viewer 是一个为真实数据文件设计的 VS Code 查看�
 - 虚拟化表格支持字段采样、列宽调整、行键盘导航和滚动位置恢复，常驻 DOM 行数保持很小。
 - 原始行全文搜索；按 JSON Pointer 进行等于、不等于、包含、比较、存在和空值过滤。
 - 查询结果写入临时磁盘索引，支持分页、进度展示和取消，不在内存保存全部命中行。
-- 点击行后在详情树中查看完整 JSON；非法 JSON 行独立标红，不会阻断其他记录。
+- 点击行后在详情树中查看完整 JSON；可最大化 Selected record 专注检查，按 `Esc` 恢复表格，调整窗口时已展开分支不会丢失。
+- 只有一条合法记录的 JSONL/NDJSON 自动按普通 JSON 树打开；非法单条记录仍留在 JSONL 诊断视图中独立标红。
 - 超大文件默认只读，源文件不会整体传入扩展宿主或 Webview；检测到外部修改会立即停止旧索引并提示刷新。
 
 ### 按文件大小自动选择模式
@@ -104,10 +105,10 @@ npm ci
 npm run package
 ```
 
-然后在 VS Code 中安装生成的 `vscode-json-viewer-0.1.1.vsix`（文件名以实际输出为准），或执行：
+然后在 VS Code 中安装生成的 `vscode-json-viewer-0.2.0.vsix`（文件名以实际输出为准），或执行：
 
 ```bash
-code --install-extension ./vscode-json-viewer-0.1.1.vsix
+code --install-extension ./vscode-json-viewer-0.2.0.vsix
 ```
 
 ### 打开文件
