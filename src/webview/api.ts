@@ -26,6 +26,7 @@ export interface PersistedState {
   tableScrollTop?: number;
   jsonlTablePanePercent?: number;
   treePanePercent?: number;
+  jsonlDetailMaximized?: boolean;
 }
 
 export type NotificationKind = 'external' | 'crash' | 'error';

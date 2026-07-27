@@ -88,6 +88,7 @@ export function JsonlView({
   const [filterValue, setFilterValue] = useState(persisted.filterValue ?? '');
   const [sortPointer, setSortPointer] = useState(persisted.sortPointer ?? '');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>(persisted.sortDirection ?? 'asc');
+  const [detailMaximized, setDetailMaximized] = useState(Boolean(persisted.jsonlDetailMaximized));
   const [queryNeedsRun, setQueryNeedsRun] = useState(() => hasQueryDraft(
     persisted.queryText ?? '', persisted.filterPointer ?? '', persisted.filterOperation ?? 'none', persisted.sortPointer ?? '',
   ));
@@ -100,6 +101,23 @@ export function JsonlView({
   const pendingRowFocus = useRef<number | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingScrollTop = useRef(persisted.tableScrollTop);
+
+  const updateDetailMaximized = useCallback((next: boolean): void => {
+    setDetailMaximized(next);
+    api.updateState({ jsonlDetailMaximized: next });
+  }, []);
+
+  const detailFocusActive = detailMaximized && selected !== undefined;
+  useEffect(() => {
+    if (!detailFocusActive) return;
+    const restoreOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      updateDetailMaximized(false);
+    };
+    window.addEventListener('keydown', restoreOnEscape);
+    return () => window.removeEventListener('keydown', restoreOnEscape);
+  }, [detailFocusActive, updateDetailMaximized]);
 
   const cancelRowTreeRequest = useCallback((): void => {
     const request = rowTreeRequest.current;
@@ -502,11 +520,12 @@ export function JsonlView({
     {error && <div className="banner error" role="alert"><span className="banner-icon"><Icon name="error" /></span><span>{error}</span><button className="icon-button ghost-button" aria-label="Dismiss" title="Dismiss" onClick={() => setError(undefined)}><Icon name="close" /></button></div>}
     <ResizableSplit
       className="jsonl-layout"
-      defaultPercent={72}
+      defaultPercent={62}
       initialPercent={persisted.jsonlTablePanePercent}
-      minStart={420}
-      minEnd={480}
+      minStart={240}
+      minEnd={240}
       label="Resize records table and row details"
+      {...(detailFocusActive ? { maximizedPane: 'end' as const } : {})}
       onChange={(next) => api.updateState({ jsonlTablePanePercent: next })}
     >
       <section className="table-pane">
@@ -556,7 +575,10 @@ export function JsonlView({
         {!selected && <div className="empty-state"><div className="empty-illustration"><Icon name="braces" size={22} /></div><div><strong>Select a record</strong><span>Its complete JSON tree will appear here.</span></div></div>}
         {selected && <div className="row-detail-header">
           <div className="record-identity"><span className="eyebrow">Selected record</span><div className="record-title">Line {selected.physicalLine.toLocaleString()}<span className={`status-pill status-${selected.status}`}><span className="status-orb" />{selected.status}</span></div></div>
-          <button className="subtle-button" onClick={() => api.command({ type: 'openAsText', physicalLine: selected.physicalLine, ...(selected.diagnostic?.column !== undefined ? { column: selected.diagnostic.column } : {}) })}><Icon name="external" />Open source</button>
+          <div className="row-detail-actions">
+            <button className="subtle-button" title={detailFocusActive ? 'Restore records table' : 'Maximize selected record'} aria-pressed={detailFocusActive} onClick={() => updateDetailMaximized(!detailFocusActive)}><Icon name={detailFocusActive ? 'restore' : 'maximize'} />{detailFocusActive ? 'Restore' : 'Maximize'}</button>
+            <button className="subtle-button" onClick={() => api.command({ type: 'openAsText', physicalLine: selected.physicalLine, ...(selected.diagnostic?.column !== undefined ? { column: selected.diagnostic.column } : {}) })}><Icon name="external" />Open source</button>
+          </div>
         </div>}
         {rowTreeLoading && <div className="empty-state loading-state"><div className="spinner" /><div><strong>Loading record</strong><span>Building its JSON tree…</span></div></div>}
         {selected && selected.status !== 'valid' && <div className="diagnostic-panel"><div className="diagnostic-heading"><span className="diagnostic-icon"><Icon name="warning" /></span><div><span className="eyebrow">Record diagnostic</span><strong>{selected.diagnostic?.message}</strong></div></div><pre>{selected.raw}</pre></div>}

@@ -37,6 +37,7 @@ interface ResizableSplitProps {
   minStart: number;
   minEnd: number;
   label: string;
+  maximizedPane?: 'start' | 'end';
   onChange?: (percent: number) => void;
 }
 
@@ -54,21 +55,17 @@ export function ResizableSplit({
   minStart,
   minEnd,
   label,
+  maximizedPane,
   onChange,
 }: ResizableSplitProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const activePointer = useRef<number | undefined>(undefined);
   const percentRef = useRef(normalizeSplitPercent(initialPercent, defaultPercent));
-  const onChangeRef = useRef(onChange);
   const [percent, setPercent] = useState(percentRef.current);
   const [containerWidth, setContainerWidth] = useState(0);
   const panes = React.Children.toArray(children);
 
   if (panes.length !== 2) throw new Error('ResizableSplit requires exactly two panes.');
-
-  useEffect(() => {
-    onChangeRef.current = onChange;
-  }, [onChange]);
 
   const update = (next: number): number => {
     const width = containerRef.current?.getBoundingClientRect().width ?? 0;
@@ -98,22 +95,16 @@ export function ResizableSplit({
     document.body.classList.remove('resizing-columns');
   }, []);
 
-  // A persisted percentage can be valid in a wide editor but impossible in a
-  // narrow one. CSS clamps the grid visually, so normalize the React state as
-  // soon as the real container width is known as well. Without this pass,
-  // keyboard arrows and aria-valuenow would operate on the hidden, unclamped
-  // value (for example 72% while the visible pane is limited to 53%).
+  // A persisted percentage can be impossible in a temporarily narrow editor.
+  // CSS and aria clamp it visually, but keep the user's requested percentage
+  // intact so widening the editor restores the layout instead of permanently
+  // overwriting it during a window resize.
   useEffect(() => {
     const element = containerRef.current;
     if (!element) return;
     const measure = (width = element.getBoundingClientRect().width): void => {
       if (!Number.isFinite(width) || width <= 0) return;
       setContainerWidth((previous) => Math.abs(previous - width) < 0.5 ? previous : width);
-      const clamped = clampSplitPercent(percentRef.current, width, minStart, minEnd);
-      if (Math.abs(clamped - percentRef.current) < 0.01) return;
-      percentRef.current = clamped;
-      setPercent(clamped);
-      onChangeRef.current?.(clamped);
     };
     measure();
     if (typeof ResizeObserver !== 'undefined') {
@@ -141,7 +132,9 @@ export function ResizableSplit({
     '--split-min-end': `${minEnd}px`,
   };
 
-  return <div ref={containerRef} className={`resizable-split ${className}`} style={style}>
+  const maximizedClass = maximizedPane ? ` split-maximized-${maximizedPane}` : '';
+
+  return <div ref={containerRef} className={`resizable-split ${className}${maximizedClass}`} style={style}>
     {panes[0]}
     <div
       className="splitter"
@@ -159,9 +152,11 @@ export function ResizableSplit({
       }}
       onKeyDown={(event) => {
         const step = event.shiftKey ? 10 : 2;
+        const width = containerRef.current?.clientWidth ?? 0;
+        const current = width > 0 ? clampSplitPercent(percentRef.current, width, minStart, minEnd) : percentRef.current;
         let next: number | undefined;
-        if (event.key === 'ArrowLeft') next = percentRef.current - step;
-        else if (event.key === 'ArrowRight') next = percentRef.current + step;
+        if (event.key === 'ArrowLeft') next = current - step;
+        else if (event.key === 'ArrowRight') next = current + step;
         else if (event.key === 'Home') next = splitBounds(containerRef.current?.clientWidth ?? 0, minStart, minEnd).minimum;
         else if (event.key === 'End') next = splitBounds(containerRef.current?.clientWidth ?? 0, minStart, minEnd).maximum;
         if (next === undefined) return;

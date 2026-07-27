@@ -657,8 +657,8 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
     className={rowTree ? 'tree-explorer row-tree-explorer' : 'tree-explorer'}
     defaultPercent={defaultTreePanePercent}
     initialPercent={api.state().treePanePercent}
-    minStart={rowTree ? 180 : 260}
-    minEnd={rowTree ? 220 : 250}
+    minStart={rowTree ? 120 : 220}
+    minEnd={rowTree ? 140 : 220}
     label="Resize JSON tree and inspector"
     onChange={(next) => api.updateState({ treePanePercent: next })}
   >
