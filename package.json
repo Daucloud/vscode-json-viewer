@@ -1,0 +1,228 @@
+{
+  "name": "vscode-json-viewer",
+  "displayName": "Fast JSON & JSONL Viewer",
+  "description": "A responsive, lazy JSON tree and streaming JSONL/NDJSON viewer for very large files.",
+  "version": "0.1.0",
+  "publisher": "daucloud",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/daucloud/vscode-json-viewer"
+  },
+  "type": "module",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "json",
+    "jsonl",
+    "ndjson",
+    "viewer",
+    "large files"
+  ],
+  "main": "./dist/extension.cjs",
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onCustomEditor:fastJsonViewer.json",
+    "onCustomEditor:fastJsonViewer.jsonl",
+    "onCommand:fastJsonViewer.open",
+    "onCommand:fastJsonViewer.refresh",
+    "onCommand:fastJsonViewer.openAsText",
+    "onCommand:fastJsonViewer.clearIndexCache"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "jsonl",
+        "aliases": [
+          "JSON Lines",
+          "JSONL",
+          "NDJSON"
+        ],
+        "extensions": [
+          ".jsonl",
+          ".ndjson",
+          ".jsonlines"
+        ]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "jsonl",
+        "scopeName": "source.json.lines",
+        "path": "./syntaxes/jsonl.tmLanguage.json"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "fastJsonViewer.json",
+        "displayName": "Fast JSON Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.json"
+          }
+        ],
+        "priority": "option"
+      },
+      {
+        "viewType": "fastJsonViewer.jsonl",
+        "displayName": "Fast JSONL Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.jsonl"
+          },
+          {
+            "filenamePattern": "*.ndjson"
+          },
+          {
+            "filenamePattern": "*.jsonlines"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "fastJsonViewer.open",
+        "title": "Open in Fast JSON Viewer",
+        "category": "Fast JSON Viewer",
+        "icon": "$(preview)"
+      },
+      {
+        "command": "fastJsonViewer.refresh",
+        "title": "Refresh Viewer",
+        "category": "Fast JSON Viewer",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "fastJsonViewer.openAsText",
+        "title": "Open as Text",
+        "category": "Fast JSON Viewer",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "fastJsonViewer.clearIndexCache",
+        "title": "Clear Index Cache",
+        "category": "Fast JSON Viewer"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "fastJsonViewer.open",
+          "when": "resourceExtname == .json || resourceExtname == .jsonl || resourceExtname == .ndjson || resourceExtname == .jsonlines",
+          "group": "navigation@90"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "fastJsonViewer.open",
+          "when": "resourceExtname == .json && activeCustomEditorId != fastJsonViewer.json",
+          "group": "navigation@20"
+        },
+        {
+          "command": "fastJsonViewer.refresh",
+          "when": "activeCustomEditorId == fastJsonViewer.json || activeCustomEditorId == fastJsonViewer.jsonl",
+          "group": "navigation@20"
+        },
+        {
+          "command": "fastJsonViewer.openAsText",
+          "when": "activeCustomEditorId == fastJsonViewer.json || activeCustomEditorId == fastJsonViewer.jsonl",
+          "group": "navigation@21"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Fast JSON Viewer",
+      "properties": {
+        "fastJsonViewer.editableMaxMB": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Files at or below this size can be edited in the viewer. JSONL/NDJSON also has a hard 10 MB edit cap."
+        },
+        "fastJsonViewer.maxJsonMB": {
+          "type": "number",
+          "default": 100,
+          "minimum": 10,
+          "maximum": 1024,
+          "description": "Maximum JSON size for a complete lazy tree. Larger JSON files use the safe raw preview."
+        },
+        "fastJsonViewer.jsonl.pageSize": {
+          "type": "integer",
+          "default": 200,
+          "minimum": 20,
+          "maximum": 1000,
+          "description": "Maximum JSONL records requested per page."
+        },
+        "fastJsonViewer.jsonl.schemaSampleRows": {
+          "type": "integer",
+          "default": 1000,
+          "minimum": 20,
+          "maximum": 10000,
+          "description": "Initial JSONL records sampled to discover table columns."
+        },
+        "fastJsonViewer.jsonl.maxLineMB": {
+          "type": "number",
+          "default": 16,
+          "minimum": 0.1,
+          "maximum": 256,
+          "description": "Maximum JSONL record size parsed completely. Longer records are shown as truncated error rows."
+        },
+        "fastJsonViewer.jsonl.sortMaxRows": {
+          "type": "integer",
+          "default": 1000000,
+          "minimum": 1000,
+          "maximum": 10000000,
+          "description": "Maximum record count for global field sorting."
+        },
+        "fastJsonViewer.indexCacheMB": {
+          "type": "integer",
+          "default": 1024,
+          "minimum": 64,
+          "maximum": 16384,
+          "description": "Maximum persistent JSONL line-index cache size. Source contents are never cached."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "node scripts/esbuild.mjs",
+    "build:tests": "node scripts/esbuild-tests.mjs",
+    "watch": "node scripts/esbuild.mjs --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:vscode": "npm run build && npm run build:tests && node ./dist-tests/runTest.cjs",
+    "benchmark": "npm run build && node test/performance/benchmark.mjs",
+    "benchmark:10gb": "npm run build && node test/performance/benchmark.mjs --size-gb 10",
+    "package": "npm run check && npm run test && npm run build && vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "^3.13.12",
+    "jsonc-parser": "^3.3.1",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^22.17.0",
+    "@types/react": "^19.1.9",
+    "@types/react-dom": "^19.1.7",
+    "@types/vscode": "^1.95.0",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.25.9",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

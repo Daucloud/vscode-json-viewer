@@ -1,0 +1,70 @@
+import { applyEdits, findNodeAtLocation, getNodeValue, modify, parseTree, type FormattingOptions, type JSONPath } from 'jsonc-parser';
+import type { JsonEditOperation } from '../shared/types.js';
+import { PreviewError } from './errors.js';
+
+interface LineSlice { start: number; end: number; text: string }
+
+function formattingFor(text: string): FormattingOptions {
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const indentation = /(?:^|\r?\n)([ \t]+)["}\]]/m.exec(text)?.[1] ?? '  ';
+  return {
+    eol,
+    insertSpaces: !indentation.includes('\t'),
+    tabSize: indentation.includes('\t') ? 1 : Math.max(1, Math.min(8, indentation.length)),
+  };
+}
+
+function lineAt(text: string, physicalLine: number): LineSlice {
+  if (!Number.isInteger(physicalLine) || physicalLine < 1) throw new PreviewError('LINE_NOT_FOUND', 'Invalid JSONL line number.');
+  let line = 1;
+  let start = 0;
+  while (line < physicalLine) {
+    const newline = text.indexOf('\n', start);
+    if (newline < 0) throw new PreviewError('LINE_NOT_FOUND', `Line ${physicalLine} does not exist.`);
+    start = newline + 1;
+    line++;
+  }
+  const newline = text.indexOf('\n', start);
+  let end = newline < 0 ? text.length : newline;
+  if (end > start && text.charCodeAt(end - 1) === 0x0d) end--;
+  return { start, end, text: text.slice(start, end) };
+}
+
+export function applyJsonEdit(source: string, edit: JsonEditOperation): string {
+  const bom = source.charCodeAt(0) === 0xfeff ? '\ufeff' : '';
+  const text = bom ? source.slice(1) : source;
+  const path = [...edit.path] as JSONPath;
+  const options = { formattingOptions: formattingFor(text) };
+  let result: string;
+
+  if (edit.kind === 'rename') {
+    if (path.length === 0 || !edit.newKey.trim()) throw new PreviewError('INVALID_EDIT', 'A property name is required.');
+    const oldKey = path[path.length - 1];
+    if (typeof oldKey !== 'string') throw new PreviewError('INVALID_EDIT', 'Array items cannot be renamed.');
+    const tree = parseTree(text);
+    const node = tree ? findNodeAtLocation(tree, path) : undefined;
+    if (!node) throw new PreviewError('POINTER_NOT_FOUND', 'The selected property no longer exists.');
+    const parentPath = path.slice(0, -1);
+    if (tree && findNodeAtLocation(tree, [...parentPath, edit.newKey])) {
+      throw new PreviewError('DUPLICATE_KEY', `The property “${edit.newKey}” already exists.`);
+    }
+    const value = getNodeValue(node) as unknown;
+    const removed = applyEdits(text, modify(text, path, undefined, options));
+    result = applyEdits(removed, modify(removed, [...parentPath, edit.newKey], value, { formattingOptions: formattingFor(removed) }));
+  } else {
+    const value = edit.kind === 'delete' ? undefined : edit.value;
+    result = applyEdits(text, modify(text, path, value, {
+      ...options,
+      ...(edit.kind === 'add' && edit.insertArray ? { isArrayInsertion: true } : {}),
+    }));
+  }
+  return `${bom}${result}`;
+}
+
+export function applyDocumentEdit(source: string, kind: 'json' | 'jsonl', edit: JsonEditOperation): string {
+  if (kind !== 'jsonl') return applyJsonEdit(source, edit);
+  if (edit.physicalLine === undefined) throw new PreviewError('LINE_REQUIRED', 'Select a JSONL record before editing.');
+  const line = lineAt(source, edit.physicalLine);
+  const revised = applyJsonEdit(line.text, edit);
+  return `${source.slice(0, line.start)}${revised}${source.slice(line.end)}`;
+}

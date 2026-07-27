@@ -1,0 +1,17 @@
+.github/**
+.vscode/**
+.gitignore
+scripts/**
+src/**
+test/**
+dist-tests/**
+node_modules/**
+coverage/**
+*.vsix
+tsconfig.json
+vitest.config.ts
+package-lock.json
+!dist/**
+!syntaxes/**
+!README.md
+!LICENSE

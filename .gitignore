@@ -1,0 +1,9 @@
+node_modules/
+dist/
+dist-tests/
+coverage/
+*.vsix
+*.log
+.DS_Store
+.vscode-test/
+test/performance/generated/
