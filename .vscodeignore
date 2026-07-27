@@ -18,4 +18,5 @@ package-lock.json
 !dist/**
 !syntaxes/**
 !README.md
+README.zh-CN.md
 !LICENSE

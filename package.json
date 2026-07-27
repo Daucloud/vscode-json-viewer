@@ -2,7 +2,7 @@
   "name": "vscode-json-viewer",
   "displayName": "Fast JSON & JSONL Viewer",
   "description": "A responsive, lazy JSON tree and streaming JSONL/NDJSON viewer for very large files.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "daucloud",
   "icon": "media/icon.png",
   "license": "MIT",
