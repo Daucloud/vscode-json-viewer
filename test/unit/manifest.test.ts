@@ -2,6 +2,9 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
 const manifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')) as {
+  description: string;
+  categories: string[];
+  keywords: string[];
   main: string;
   icon: string;
   extensionKind: string[];
@@ -20,6 +23,15 @@ describe('extension manifest', () => {
     expect(manifest.icon).toBe('media/icon.png');
     const icon = await readFile(new URL(`../../${manifest.icon}`, import.meta.url));
     expect(icon.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  });
+
+  it('publishes focused Marketplace discovery metadata', () => {
+    expect(manifest.description).toMatch(/JSON, JSONL, and NDJSON viewer/i);
+    expect(manifest.categories).toEqual(expect.arrayContaining(['Visualization', 'Data Science']));
+    expect(manifest.keywords).toEqual(expect.arrayContaining([
+      'json viewer', 'json tree', 'large json', 'jsonl viewer', 'ndjson viewer', 'large file viewer',
+    ]));
+    expect(new Set(manifest.keywords).size).toBe(manifest.keywords.length);
   });
 
   it('declares desktop/workspace custom editor priorities', () => {

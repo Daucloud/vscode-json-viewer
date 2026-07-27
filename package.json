@@ -1,8 +1,8 @@
 {
   "name": "vscode-json-viewer",
   "displayName": "Fast JSON & JSONL Viewer",
-  "description": "A responsive, lazy JSON tree and streaming JSONL/NDJSON viewer for very large files.",
-  "version": "0.1.1",
+  "description": "High-performance JSON, JSONL, and NDJSON viewer for huge files with a lazy tree, virtual table, search, filtering, and small-file editing.",
+  "version": "0.2.0",
   "publisher": "daucloud",
   "icon": "media/icon.png",
   "license": "MIT",
@@ -24,14 +24,34 @@
   },
   "categories": [
     "Visualization",
+    "Data Science",
     "Other"
   ],
   "keywords": [
     "json",
+    "json viewer",
+    "json editor",
+    "json tree",
+    "json explorer",
+    "json browser",
+    "json inspector",
+    "json preview",
+    "large json",
+    "huge json",
+    "big json",
     "jsonl",
+    "jsonl viewer",
     "ndjson",
+    "ndjson viewer",
+    "json lines",
     "viewer",
-    "large files"
+    "large files",
+    "large file viewer",
+    "log viewer",
+    "data viewer",
+    "streaming json",
+    "json pointer",
+    "virtual table"
   ],
   "main": "./dist/extension.cjs",
   "extensionKind": [

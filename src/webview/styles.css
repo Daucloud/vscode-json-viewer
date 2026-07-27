@@ -409,6 +409,7 @@ body.resizing-columns, body.resizing-columns * { cursor: col-resize !important; 
 .row-detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--vscode-editor-background); }
 .row-detail-header { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; min-height: 58px; padding: 8px 10px; border-bottom: 1px solid var(--viewer-border); background: linear-gradient(180deg, var(--viewer-surface-raised), var(--viewer-surface)); }
 .record-identity { min-width: 0; flex: 1; }
+.row-detail-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .record-title { display: flex; align-items: center; gap: 7px; margin-top: 2px; color: var(--vscode-foreground); font-size: 13px; font-weight: 650; line-height: 18px; }
 .status-pill { font-size: 8px; line-height: 17px; }
 .status-valid { color: var(--viewer-green); }
@@ -473,6 +474,16 @@ body.resizing-columns, body.resizing-columns * { cursor: col-resize !important; 
   .tree-toolbar .ui-icon { width: 15px; height: 15px; }
   .visible-count { display: none; }
 }
+
+/* Focus one pane without unmounting it, preserving virtualized tree state. */
+.resizable-split.split-maximized-start,
+.resizable-split.split-maximized-end { display: block; }
+.resizable-split.split-maximized-start > .splitter,
+.resizable-split.split-maximized-start > :last-child,
+.resizable-split.split-maximized-end > .splitter,
+.resizable-split.split-maximized-end > :first-child { display: none; }
+.resizable-split.split-maximized-start > :first-child,
+.resizable-split.split-maximized-end > :last-child { width: 100%; height: 100%; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0s !important; animation-duration: 0s !important; animation-iteration-count: 1 !important; }

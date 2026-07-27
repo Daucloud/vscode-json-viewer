@@ -5,6 +5,7 @@ import { TextDecoder } from 'node:util';
 import type { SessionOpenResult, WorkerEvent } from '../shared/types.js';
 import { PreviewError, toWorkerFailure } from './errors.js';
 import { JsonEngine } from './jsonEngine.js';
+import { isSingleRecordJsonlSource } from './jsonlDetection.js';
 import { JsonlEngine } from './jsonlEngine.js';
 import { applyDocumentEdit } from './editing.js';
 import { computeFileSignature } from './lineIndex.js';
@@ -167,7 +168,7 @@ async function openSession(
   sessions.delete(request.sessionId);
   await closeSession(previous);
 
-  if (request.kind === 'json') {
+  const openAsJson = async (): Promise<SessionOpenResult> => {
     const loaded = await readStrictUtf8(request.source);
     const engine = JsonEngine.parse(loaded.text, loaded.source.type === 'text');
     const session: JsonSession = {
@@ -184,6 +185,18 @@ async function openSession(
     sessions.set(request.sessionId, session);
     startJsonSourceMonitor(session);
     return { kind: 'json', root: engine.summary(), parseMilliseconds: engine.parseMilliseconds };
+  };
+
+  if (request.kind === 'json') return openAsJson();
+
+  if (await isSingleRecordJsonlSource(request.source, request.settings.maxJsonBytes)) {
+    try {
+      return await openAsJson();
+    } catch (error) {
+      // A malformed or invalid-UTF-8 single line still belongs in the JSONL
+      // viewer so it can be diagnosed independently instead of failing open.
+      if (!(error instanceof PreviewError) || (error.code !== 'INVALID_JSON' && error.code !== 'INVALID_UTF8')) throw error;
+    }
   }
 
   const opened = await JsonlEngine.open(

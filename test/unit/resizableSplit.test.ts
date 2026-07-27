@@ -27,4 +27,11 @@ describe('resizable split sizing', () => {
     expect(bounds.maximum).toBeCloseTo(53.52, 2);
     expect(clampSplitPercent(72, 1_052, 420, 480)).toBeCloseTo(bounds.maximum);
   });
+
+  it('allows a practical drag range for the JSONL table and selected record', () => {
+    const bounds = splitBounds(1_052, 240, 240);
+    expect(bounds.minimum).toBeCloseTo(22.81, 2);
+    expect(bounds.maximum).toBeCloseTo(76.33, 2);
+    expect(clampSplitPercent(62, 1_052, 240, 240)).toBe(62);
+  });
 });
