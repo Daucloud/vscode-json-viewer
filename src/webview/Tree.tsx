@@ -267,7 +267,12 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
     commitEntries(next);
     setExpandedState(new Set(props.initialExpanded ?? []));
     setSelectedPointer(props.initialSelected ?? props.root.pointer);
-  }, [props.root, props.initialExpanded, props.initialSelected, commitEntries]);
+    // `initialExpanded` and `initialSelected` are bootstrap snapshots. A
+    // container resize can re-render the parent with a newer persisted array;
+    // treating that as a new tree would discard all lazily loaded children.
+    // The root identity (or the caller's key) is the document boundary.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.root, commitEntries]);
 
   useEffect(() => {
     const paths = [...(props.initialExpanded ?? [])].sort((left, right) => left.split('/').length - right.split('/').length);
