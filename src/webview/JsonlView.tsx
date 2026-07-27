@@ -330,6 +330,11 @@ export function JsonlView({
   };
 
   const runQuery = async (): Promise<void> => {
+    if (filterOperation !== 'none' && !filterPointer.trim()) {
+      setError('Enter a JSON Pointer before choosing a field condition.');
+      setQueryNeedsRun(true);
+      return;
+    }
     const generation = ++queryGeneration.current;
     const previousRequest = runningRequestRef.current;
     if (previousRequest) void api.request({ type: 'cancel', targetRequestId: previousRequest }).catch(() => undefined);
@@ -481,14 +486,14 @@ export function JsonlView({
           <select aria-label="Sort direction" disabled={!sortPointer} value={sortDirection} onChange={(event) => { setSortDirection(event.target.value as 'asc' | 'desc'); setQueryNeedsRun(true); }}><option value="asc">Ascending</option><option value="desc">Descending</option></select>
         </div>
         <span className="spacer" />
-        {runningRequest && <button className="ghost-button" onClick={() => void api.request({ type: 'cancel', targetRequestId: runningRequest })}><Icon name="close" />Cancel scan</button>}
+        {runningRequest && <button className="ghost-button" onClick={() => api.command({ type: 'cancel', targetRequestId: runningRequest })}><Icon name="close" />Cancel scan</button>}
         {queryId !== 'default' && <button className="ghost-button" onClick={() => void resetQuery()}><Icon name="reset" />Reset query</button>}
         {editable && <div className="toolbar-actions edit-actions">
           <span className="toolbar-divider" />
-          <button className="icon-button ghost-button" title="Undo" aria-label="Undo" onClick={() => void api.request({ type: 'undo' })}><Icon name="undo" /></button>
-          <button className="icon-button ghost-button" title="Redo" aria-label="Redo" onClick={() => void api.request({ type: 'redo' })}><Icon name="redo" /></button>
-          <button className="primary" onClick={() => void api.request({ type: 'save' })}><Icon name="save" />Save</button>
-          <button onClick={() => void api.request({ type: 'saveAs' })}><Icon name="saveAs" />Save As…</button>
+          <button className="icon-button ghost-button" title="Undo" aria-label="Undo" onClick={() => api.command({ type: 'undo' })}><Icon name="undo" /></button>
+          <button className="icon-button ghost-button" title="Redo" aria-label="Redo" onClick={() => api.command({ type: 'redo' })}><Icon name="redo" /></button>
+          <button className="primary" onClick={() => api.command({ type: 'save' })}><Icon name="save" />Save</button>
+          <button onClick={() => api.command({ type: 'saveAs' })}><Icon name="saveAs" />Save As…</button>
         </div>}
       </div>
     </section>
@@ -551,7 +556,7 @@ export function JsonlView({
         {!selected && <div className="empty-state"><div className="empty-illustration"><Icon name="braces" size={22} /></div><div><strong>Select a record</strong><span>Its complete JSON tree will appear here.</span></div></div>}
         {selected && <div className="row-detail-header">
           <div className="record-identity"><span className="eyebrow">Selected record</span><div className="record-title">Line {selected.physicalLine.toLocaleString()}<span className={`status-pill status-${selected.status}`}><span className="status-orb" />{selected.status}</span></div></div>
-          <button className="subtle-button" onClick={() => void api.request({ type: 'openAsText', physicalLine: selected.physicalLine, ...(selected.diagnostic?.column !== undefined ? { column: selected.diagnostic.column } : {}) })}><Icon name="external" />Open source</button>
+          <button className="subtle-button" onClick={() => api.command({ type: 'openAsText', physicalLine: selected.physicalLine, ...(selected.diagnostic?.column !== undefined ? { column: selected.diagnostic.column } : {}) })}><Icon name="external" />Open source</button>
         </div>}
         {rowTreeLoading && <div className="empty-state loading-state"><div className="spinner" /><div><strong>Loading record</strong><span>Building its JSON tree…</span></div></div>}
         {selected && selected.status !== 'valid' && <div className="diagnostic-panel"><div className="diagnostic-heading"><span className="diagnostic-icon"><Icon name="warning" /></span><div><span className="eyebrow">Record diagnostic</span><strong>{selected.diagnostic?.message}</strong></div></div><pre>{selected.raw}</pre></div>}

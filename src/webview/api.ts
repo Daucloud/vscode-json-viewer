@@ -28,6 +28,8 @@ export interface PersistedState {
   treePanePercent?: number;
 }
 
+export type NotificationKind = 'external' | 'crash' | 'error';
+
 export class RequestError extends Error {
   constructor(readonly failure: WorkerFailure) {
     super(failure.message);
@@ -44,7 +46,7 @@ class WebviewApi {
   private readonly pending = new Map<string, { resolve: (data: ResponseData) => void; reject: (error: RequestError) => void }>();
   private readonly bootstrapListeners = new Set<(bootstrap: DocumentBootstrap) => void>();
   private readonly eventListeners = new Set<(event: WorkerEvent) => void>();
-  private readonly notificationListeners = new Set<(message: string, kind: 'external' | 'crash') => void>();
+  private readonly notificationListeners = new Set<(message: string, kind: NotificationKind) => void>();
 
   constructor() {
     window.addEventListener('message', (event: MessageEvent<HostToWebviewMessage>) => this.receive(event.data));
@@ -59,7 +61,20 @@ class WebviewApi {
         resolve: (data) => resolve(data as T),
         reject,
       });
-      this.vscode.postMessage({ type: 'request', requestId, action });
+      try {
+        this.vscode.postMessage({ type: 'request', requestId, action });
+      } catch (caught) {
+        this.pending.delete(requestId);
+        reject(new RequestError({ code: 'WEBVIEW_UNAVAILABLE', message: caught instanceof Error ? caught.message : String(caught) }));
+      }
+    });
+  }
+
+  command(action: ViewerAction): void {
+    void this.request(action).catch((caught: unknown) => {
+      if (caught instanceof RequestError && (caught.failure.code === 'CANCELLED' || /cancel/i.test(caught.failure.message))) return;
+      const message = caught instanceof Error ? caught.message : String(caught);
+      for (const listener of this.notificationListeners) listener(message, 'error');
     });
   }
 
@@ -78,7 +93,7 @@ class WebviewApi {
     return () => this.eventListeners.delete(listener);
   }
 
-  onNotification(listener: (message: string, kind: 'external' | 'crash') => void): () => void {
+  onNotification(listener: (message: string, kind: NotificationKind) => void): () => void {
     this.notificationListeners.add(listener);
     return () => this.notificationListeners.delete(listener);
   }

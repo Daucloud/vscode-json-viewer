@@ -21,3 +21,5 @@
 - Added a cancellable **Expand all** operation and removed an O(n²) queue walk from depth expansion.
 - Cancelled stale JSONL row-detail requests during query changes/reset, and clearly marks restored or edited query controls as pending until they are run.
 - Added a fast lexical guard for ordinary JSON numbers so JSONL filtering avoids a full numeric-literal visitor on every row; exact large-number preservation remains enabled when needed.
+- Kept JSON/JSONL view components mounted across edits and refreshes, cancelling stale searches while avoiding unnecessary full UI remounts and preserving draft controls.
+- Routed fire-and-forget toolbar actions through a visible error channel so failed saves, source reveals, and undo/redo operations no longer disappear as unhandled Webview rejections.

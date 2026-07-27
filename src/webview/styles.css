@@ -270,6 +270,7 @@ body.resizing-columns, body.resizing-columns * { cursor: col-resize !important; 
 .virtual-row { position: absolute; top: 0; left: 0; width: 100%; }
 .tree-row { display: flex; align-items: center; min-width: max-content; padding-right: 10px; border: 0; border-radius: 0; color: var(--vscode-editor-foreground); background: transparent; box-shadow: none; white-space: nowrap; transition: background-color 60ms ease; }
 .tree-row:hover { background: var(--vscode-list-hoverBackground); }
+.tree-row:focus-visible { outline: 1px solid var(--viewer-accent); outline-offset: -1px; }
 .tree-row.selected { color: var(--vscode-list-activeSelectionForeground); background: color-mix(in srgb, var(--vscode-list-activeSelectionBackground) 78%, transparent); box-shadow: inset 2px 0 var(--viewer-accent); }
 .tree-status { gap: 6px; padding-left: 8px; color: var(--viewer-red); }
 .tree-status .ui-icon { animation: none; }

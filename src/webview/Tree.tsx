@@ -209,7 +209,7 @@ function Inspector({
       <div className="inspector-actions">
         <button disabled={selected.raw === undefined || copying !== undefined} title={selected.raw === undefined ? 'This value exceeds the safe inline copy limit.' : 'Copy the complete JSON value'}
           onClick={() => void copy('value', selected.raw ?? selected.preview)}>{copying === 'value' ? <><span className="button-spinner" />Copying</> : <><Icon name="copy" />Copy value</>}</button>
-        <button onClick={() => void api.request({ type: 'revealSource', path, ...(physicalLine ? { physicalLine } : {}) })}><Icon name="external" />Source</button>
+        <button onClick={() => api.command({ type: 'revealSource', path, ...(physicalLine ? { physicalLine } : {}) })}><Icon name="external" />Source</button>
       </div>
       {copyNotice && <div className={`copy-notice ${copyNotice.kind}`} role={copyNotice.kind === 'error' ? 'alert' : 'status'}><Icon name={copyNotice.kind === 'error' ? 'error' : 'check'} />{copyNotice.message}</div>}
 

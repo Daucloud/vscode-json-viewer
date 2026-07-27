@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { DocumentBootstrap, WorkerEvent } from '../shared/types.js';
-import { api } from './api.js';
+import { api, type NotificationKind } from './api.js';
 import { Icon } from './Icons.js';
 import { JsonView } from './JsonView.js';
 import { JsonlView } from './JsonlView.js';
@@ -15,7 +15,7 @@ function formatBytes(bytes: number): string {
 export function App(): React.JSX.Element {
   const [bootstrap, setBootstrap] = useState<DocumentBootstrap>();
   const [event, setEvent] = useState<WorkerEvent>();
-  const [notification, setNotification] = useState<{ message: string; kind: 'external' | 'crash' }>();
+  const [notification, setNotification] = useState<{ message: string; kind: NotificationKind }>();
 
   useEffect(() => {
     const removeBootstrap = api.onBootstrap((next) => {
@@ -54,14 +54,14 @@ export function App(): React.JSX.Element {
         </div>
       </div>
       <div className="header-actions">
-        <button className="subtle-button" onClick={() => void api.request({ type: 'refresh' })}><Icon name="refresh" />Refresh</button>
-        <button className="subtle-button" onClick={() => void api.request({ type: 'openAsText' })}><Icon name="fileCode" />Open as text</button>
+        <button className="subtle-button" onClick={() => api.command({ type: 'refresh' })}><Icon name="refresh" />Refresh</button>
+        <button className="subtle-button" onClick={() => api.command({ type: 'openAsText' })}><Icon name="fileCode" />Open as text</button>
       </div>
     </header>
-    {notification && <div className={`banner ${notification.kind === 'crash' ? 'error' : 'warning'}`} role="alert">
-      <span className="banner-icon"><Icon name={notification.kind === 'crash' ? 'error' : 'warning'} /></span>
+    {notification && <div className={`banner ${notification.kind === 'external' ? 'warning' : 'error'}`} role="alert">
+      <span className="banner-icon"><Icon name={notification.kind === 'external' ? 'warning' : 'error'} /></span>
       <span>{notification.message}</span>
-      <button className="banner-action" onClick={() => void api.request({ type: 'refresh' })}><Icon name="refresh" />Refresh</button>
+      {notification.kind !== 'error' && <button className="banner-action" onClick={() => api.command({ type: 'refresh' })}><Icon name="refresh" />Refresh</button>}
       <button className="icon-button ghost-button" aria-label="Dismiss" title="Dismiss" onClick={() => setNotification(undefined)}><Icon name="close" /></button>
     </div>}
     {bootstrap.mode === 'fallback' && <section className="fallback-view">
@@ -70,7 +70,7 @@ export function App(): React.JSX.Element {
         <div className="eyebrow">Safe preview</div>
         <h2>Structured preview was limited</h2>
         <p>{bootstrap.fallbackReason}</p>
-        <div className="button-row"><button className="primary" onClick={() => void api.request({ type: 'openAsText' })}><Icon name="fileCode" />Open as text</button><button onClick={() => void api.request({ type: 'refresh' })}><Icon name="refresh" />Try again</button></div>
+        <div className="button-row"><button className="primary" onClick={() => api.command({ type: 'openAsText' })}><Icon name="fileCode" />Open as text</button><button onClick={() => api.command({ type: 'refresh' })}><Icon name="refresh" />Try again</button></div>
       </div>
       <div className="preview-card"><div className="preview-card-title"><Icon name="fileCode" />Truncated source preview</div><pre>{bootstrap.fallbackPreview}</pre></div>
     </section>}
@@ -84,7 +84,7 @@ export function App(): React.JSX.Element {
         <div className="loading-hint"><span className="status-orb success" />VS Code remains responsive</div>
       </div>
     </section>}
-    {bootstrap.mode !== 'fallback' && result?.kind === 'json' && <JsonView key={`${bootstrap.sessionId}:${result.parseMilliseconds}:${result.root.preview}`} result={result} editable={bootstrap.editable} />}
-    {bootstrap.mode !== 'fallback' && result?.kind === 'jsonl' && <JsonlView key={`${bootstrap.sessionId}:${result.indexMilliseconds ?? 'indexing'}:${result.initialRows.length}`} result={result} editable={bootstrap.editable} pageSize={bootstrap.settings.pageSize} {...(event ? { workerEvent: event } : {})} />}
+    {bootstrap.mode !== 'fallback' && result?.kind === 'json' && <JsonView key={`${bootstrap.sessionId}:json`} result={result} editable={bootstrap.editable} />}
+    {bootstrap.mode !== 'fallback' && result?.kind === 'jsonl' && <JsonlView key={`${bootstrap.sessionId}:jsonl`} result={result} editable={bootstrap.editable} pageSize={bootstrap.settings.pageSize} {...(event ? { workerEvent: event } : {})} />}
   </main>;
 }
