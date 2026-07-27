@@ -12,6 +12,7 @@ const valueAfter = (name) => {
 };
 const sizeGb = valueAfter('--size-gb');
 const sizeMb = valueAfter('--size-mb') ?? (sizeGb ? sizeGb * 1024 : 100);
+const minimumThroughput = valueAfter('--min-throughput') ?? 100;
 const assertTargets = args.has('--assert');
 const keep = args.has('--keep');
 const targetBytes = Math.floor(sizeMb * 1024 * 1024);
@@ -185,7 +186,7 @@ try {
   if (assertTargets && sizeMb >= 95 && sizeMb <= 110) {
     if (firstPageMs > 1000) failures.push(`JSONL first page ${firstPageMs.toFixed(0)} ms exceeds 1000 ms`);
     if (queryMs > 2000) failures.push(`JSONL filter ${queryMs.toFixed(0)} ms exceeds 2000 ms`);
-    if (throughput < 100) failures.push(`JSONL throughput ${throughput.toFixed(1)} MB/s is below 100 MB/s`);
+    if (throughput < minimumThroughput) failures.push(`JSONL throughput ${throughput.toFixed(1)} MB/s is below ${minimumThroughput.toFixed(1)} MB/s`);
     if (cancelMs > 200) failures.push(`Cancellation ${cancelMs.toFixed(0)} ms exceeds 200 ms`);
   }
   if (sizeGb && stableWorkerMemory > 256 * 1024 * 1024) failures.push(`JSONL worker heap + external ${mb(stableWorkerMemory).toFixed(1)} MB exceeds 256 MB`);

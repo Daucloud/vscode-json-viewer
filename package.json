@@ -10,6 +10,14 @@
     "type": "git",
     "url": "https://github.com/daucloud/vscode-json-viewer"
   },
+  "homepage": "https://github.com/daucloud/vscode-json-viewer#readme",
+  "bugs": {
+    "url": "https://github.com/daucloud/vscode-json-viewer/issues"
+  },
+  "galleryBanner": {
+    "color": "#08111f",
+    "theme": "dark"
+  },
   "type": "module",
   "engines": {
     "vscode": "^1.95.0"

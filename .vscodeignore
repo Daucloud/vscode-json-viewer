@@ -1,6 +1,9 @@
 .github/**
+docs/**
 .vscode/**
 .gitignore
+CONTRIBUTING.md
+SECURITY.md
 scripts/**
 src/**
 test/**
