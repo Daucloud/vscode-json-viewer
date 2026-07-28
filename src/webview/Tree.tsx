@@ -1,6 +1,7 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { joinPointer, parentPointer, pathFromPointer } from '../shared/pointer.js';
+import { createPortal } from 'react-dom';
+import { joinPointer, parentPointer, pathFromPointer, pointerFromPath } from '../shared/pointer.js';
 import type { JsonPath } from '../shared/pointer.js';
 import type { TreeChildrenResult, TreeNodeSummary } from '../shared/types.js';
 import type { ViewerEdit } from '../shared/webviewProtocol.js';
@@ -75,6 +76,14 @@ function parseValue(input: string): unknown {
   }
 }
 
+export function valueViewerText(node: TreeNodeSummary): string {
+  const raw = node.raw;
+  if (raw === undefined) return node.preview;
+  if (node.type !== 'object' && node.type !== 'array') return raw;
+  try { return JSON.stringify(JSON.parse(raw) as unknown, null, 2); }
+  catch { return raw; }
+}
+
 async function copyFromWebview(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);
@@ -123,6 +132,7 @@ function Inspector({
   const [error, setError] = useState<string>();
   const [copying, setCopying] = useState<'path' | 'value'>();
   const [copyNotice, setCopyNotice] = useState<{ kind: 'success' | 'error'; message: string }>();
+  const [valueViewerFullscreen, setValueViewerFullscreen] = useState(false);
   const copyNoticeTimer = useRef<number | undefined>(undefined);
   const parent = selected.pointer === '' ? undefined : entries.get(parentPointer(selected.pointer) ?? '')?.node;
 
@@ -131,11 +141,28 @@ function Inspector({
     setNewKey(selected.key);
     setError(undefined);
     setCopyNotice(undefined);
+    setValueViewerFullscreen(false);
   }, [selected]);
 
   useEffect(() => () => {
     if (copyNoticeTimer.current !== undefined) window.clearTimeout(copyNoticeTimer.current);
   }, []);
+
+  useEffect(() => {
+    if (!valueViewerFullscreen) return;
+    document.body.classList.add('value-viewer-open');
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setValueViewerFullscreen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      window.removeEventListener('keydown', closeOnEscape);
+      document.body.classList.remove('value-viewer-open');
+    };
+  }, [valueViewerFullscreen]);
 
   const runEdit = async (edit: ViewerEdit): Promise<void> => {
     if (!onEdit) return;
@@ -144,6 +171,7 @@ function Inspector({
     catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); }
   };
   const path = typedPath(selected.pointer, entries);
+  const displayedValue = valueViewerText(selected);
   const withLine = physicalLine === undefined ? {} : { physicalLine };
   const isContainer = selected.type === 'object' || selected.type === 'array';
   const applyValue = (): void => {
@@ -202,9 +230,24 @@ function Inspector({
       </div>
 
       <section className="inspector-section value-section">
-        <span className="meta-label">Value preview</span>
-        <pre className={`value-preview type-${selected.type}`} title={selected.preview}>{selected.preview}</pre>
+        <div className="value-viewer-heading">
+          <span className="meta-label">Value viewer</span>
+          <button className="icon-button ghost-button" title="View value full screen" aria-label="View value full screen" onClick={() => setValueViewerFullscreen(true)}><Icon name="maximize" /></button>
+        </div>
+        <pre className={`value-viewer type-${selected.type}`} title={selected.raw === undefined ? selected.preview : undefined}>{displayedValue}</pre>
+        {selected.raw === undefined && <span className="value-viewer-note"><Icon name="info" />This value is too large to transfer inline. The structured tree remains fully available.</span>}
       </section>
+
+      {valueViewerFullscreen && createPortal(<section className="value-viewer-fullscreen" role="dialog" aria-modal="true" aria-label={`Value viewer for ${selected.pointer || '/'}`}>
+        <header className="value-viewer-fullscreen-header">
+          <div className="value-viewer-title"><span className={`inspector-type-mark type-${selected.type}`}>{typeGlyph(selected)}</span><div><span className="eyebrow">Value viewer</span><strong title={selected.pointer || '/'}>{selected.pointer || '/'}</strong></div></div>
+          <div className="value-viewer-fullscreen-actions">
+            <button disabled={selected.raw === undefined || copying !== undefined} onClick={() => void copy('value', selected.raw ?? selected.preview)}><Icon name="copy" />Copy value</button>
+            <button className="primary" autoFocus onClick={() => setValueViewerFullscreen(false)}><Icon name="restore" />Exit full screen</button>
+          </div>
+        </header>
+        <pre className={`value-viewer-fullscreen-content type-${selected.type}`}>{displayedValue}</pre>
+      </section>, document.body)}
 
       <div className="inspector-actions">
         <button disabled={selected.raw === undefined || copying !== undefined} title={selected.raw === undefined ? 'This value exceeds the safe inline copy limit.' : 'Copy the complete JSON value'}
@@ -321,6 +364,48 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
     commitEntries(next);
   }, [commitEntries]);
 
+  const replaceNodeReferences = useCallback((entriesToUpdate: Map<string, Entry>, node: TreeNodeSummary): void => {
+    for (const [pointer, entry] of entriesToUpdate) {
+      if (!entry.children?.some((child) => child.pointer === node.pointer)) continue;
+      entriesToUpdate.set(pointer, {
+        ...entry,
+        children: entry.children.map((child) => child.pointer === node.pointer ? node : child),
+      });
+    }
+  }, []);
+
+  const replaceTreePage = useCallback((pointer: string, result: TreeChildrenResult): void => {
+    const next = new Map(entriesRef.current);
+    const previous = next.get(pointer);
+    const node = result.parent
+      ? { ...result.parent, key: previous?.node.key ?? result.parent.key }
+      : previous?.node;
+    if (!node) throw new Error('The edited tree node is no longer available.');
+
+    next.set(pointer, {
+      node,
+      children: result.children,
+      startOffset: result.offset,
+      total: result.total,
+      loading: false,
+    });
+    replaceNodeReferences(next, node);
+    for (const child of result.children) {
+      const existing = next.get(child.pointer);
+      next.set(child.pointer, existing ? { ...existing, node: child } : { node: child });
+    }
+    commitEntries(next);
+  }, [commitEntries, replaceNodeReferences]);
+
+  const removeTreeBranch = useCallback((pointer: string): void => {
+    const prefix = `${pointer}/`;
+    const next = new Map(entriesRef.current);
+    for (const key of next.keys()) {
+      if (key === pointer || key.startsWith(prefix)) next.delete(key);
+    }
+    commitEntries(next);
+  }, [commitEntries]);
+
   const loadPage = useCallback(async (pointer: string, offset: number): Promise<TreeChildrenResult> => {
     const current = entriesRef.current.get(pointer);
     if (!current) throw new Error('Tree node is no longer available.');
@@ -339,6 +424,42 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
       throw error;
     }
   }, [commitEntries, props, storeChildren]);
+
+  const editAndRefresh = useCallback(async (edit: ViewerEdit): Promise<void> => {
+    if (!props.onEdit) return;
+    await props.onEdit(edit);
+
+    const editedPointer = pointerFromPath(edit.path);
+    if (edit.kind === 'set') {
+      const result = await props.loadChildren(editedPointer, 0, 200);
+      replaceTreePage(editedPointer, result);
+      if (!result.parent?.hasChildren) {
+        const nextExpanded = new Set(expanded);
+        nextExpanded.delete(editedPointer);
+        setExpanded(nextExpanded);
+      }
+      return;
+    }
+
+    const containerPointer = parentPointer(editedPointer) ?? '';
+    const container = entriesRef.current.get(containerPointer);
+    const offset = container?.startOffset ?? 0;
+    const result = await props.loadChildren(containerPointer, offset, 200);
+    if (edit.kind === 'delete' || edit.kind === 'rename') removeTreeBranch(editedPointer);
+    replaceTreePage(containerPointer, result);
+
+    if (edit.kind === 'delete') {
+      setSelectedPointer(containerPointer);
+      props.onSelectedChange?.(containerPointer);
+      return;
+    }
+    if (edit.kind === 'rename') {
+      const renamedPointer = pointerFromPath([...edit.path.slice(0, -1), edit.newKey]);
+      const nextSelection = entriesRef.current.has(renamedPointer) ? renamedPointer : containerPointer;
+      setSelectedPointer(nextSelection);
+      props.onSelectedChange?.(nextSelection);
+    }
+  }, [expanded, props, removeTreeBranch, replaceTreePage, setExpanded]);
 
   const toggle = useCallback((node: TreeNodeSummary): void => {
     if (!node.hasChildren) return;
@@ -522,7 +643,7 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
       | { kind: 'node'; node: TreeNodeSummary; depth: number }
       | { kind: 'more'; parent: TreeNodeSummary; depth: number; offset: number; label: string }
       | { kind: 'status'; parent: TreeNodeSummary; depth: number; label: string }
-    > = [{ kind: 'node', node: props.root, depth: 0 }];
+    > = [{ kind: 'node', node: entries.get(props.root.pointer)?.node ?? props.root, depth: 0 }];
     while (stack.length > 0) {
       const current = stack.pop()!;
       if (current.kind === 'more') {
@@ -567,7 +688,7 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
     overscan: 12,
     getItemKey: (index) => rows[index]?.kind === 'node' ? `n:${rows[index].node.pointer}` : `${rows[index]?.kind}:${index}`,
   });
-  const selected = entries.get(selectedPointer)?.node ?? props.root;
+  const selected = entries.get(selectedPointer)?.node ?? entries.get(props.root.pointer)?.node ?? props.root;
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
   const pendingFocusPointer = useRef<string | undefined>(undefined);
 
@@ -707,6 +828,6 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
         </div>
       </div>
     </section>
-    <Inspector selected={selected} entries={entries} editable={props.editable} {...(props.physicalLine ? { physicalLine: props.physicalLine } : {})} {...(props.onEdit ? { onEdit: props.onEdit } : {})} />
+    <Inspector selected={selected} entries={entries} editable={props.editable} {...(props.physicalLine ? { physicalLine: props.physicalLine } : {})} {...(props.onEdit ? { onEdit: editAndRefresh } : {})} />
   </ResizableSplit>;
 }

@@ -17,6 +17,21 @@ describe('worker-side document edits', () => {
     expect(edited).toBe('{"id":1}\r\n{"id":20}\r\n');
   });
 
+  it('keeps added JSONL properties and array items on one physical line', () => {
+    let text = '{}\n{"items":[]}\n';
+    text = applyDocumentEdit(text, 'jsonl', {
+      kind: 'add', path: ['newProperty'], value: { active: true }, physicalLine: 1,
+    });
+    text = applyDocumentEdit(text, 'jsonl', {
+      kind: 'add', path: ['items', 0], value: 'first', insertArray: true, physicalLine: 2,
+    });
+
+    const lines = text.trimEnd().split('\n');
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0]!)).toEqual({ newProperty: { active: true } });
+    expect(JSON.parse(lines[1]!)).toEqual({ items: ['first'] });
+  });
+
   it('rejects JSONL edits without a selected physical line', () => {
     expect(() => applyDocumentEdit('{"id":1}', 'jsonl', { kind: 'set', path: ['id'], value: 2 })).toThrow(/record|line/i);
   });

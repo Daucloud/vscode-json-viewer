@@ -22,10 +22,18 @@ export function App(): React.JSX.Element {
       setBootstrap(next);
       setEvent(undefined);
     });
+    const removeDocumentState = api.onDocumentState((dirty) => {
+      setBootstrap((current) => {
+        if (!current) return current;
+        if (dirty) return { ...current, dirty: true };
+        const { dirty: _dirty, ...clean } = current;
+        return clean;
+      });
+    });
     const removeEvent = api.onWorkerEvent(setEvent);
     const removeNotification = api.onNotification((message, kind) => setNotification({ message, kind }));
     api.ready();
-    return () => { removeBootstrap(); removeEvent(); removeNotification(); };
+    return () => { removeBootstrap(); removeDocumentState(); removeEvent(); removeNotification(); };
   }, []);
 
   if (!bootstrap) return <div className="loading-screen">

@@ -126,6 +126,34 @@ export async function run(): Promise<void> {
       invalidCancellation.dispose();
     }
 
+    const jsonlEditCancellation = new vscode.CancellationTokenSource();
+    const jsonlEditDocument = await ViewerDocument.open(
+      jsonlUri,
+      'jsonl',
+      extension.extensionUri,
+      join(directory, 'jsonl-edit-cache'),
+      undefined,
+      jsonlEditCancellation.token,
+    );
+    try {
+      let bootstrapUpdates = 0;
+      const dirtyUpdates: boolean[] = [];
+      const bootstrapSubscription = jsonlEditDocument.onDidChangeBootstrap(() => { bootstrapUpdates++; });
+      const stateSubscription = jsonlEditDocument.onDidChangeState((dirty) => { dirtyUpdates.push(dirty); });
+      const applied = await jsonlEditDocument.applyEdit({
+        kind: 'add', path: ['profile'], value: { name: 'Ada' }, physicalLine: 1,
+      });
+      assert.equal(applied.row?.status, 'valid');
+      assert.deepEqual(JSON.parse(applied.row?.raw ?? ''), { id: 1, ok: true, profile: { name: 'Ada' } });
+      assert.equal(bootstrapUpdates, 0, 'A direct edit should not re-bootstrap and reset the complete viewer.');
+      assert.deepEqual(dirtyUpdates, [true]);
+      bootstrapSubscription.dispose();
+      stateSubscription.dispose();
+    } finally {
+      jsonlEditDocument.dispose();
+      jsonlEditCancellation.dispose();
+    }
+
     const singleRecordCancellation = new vscode.CancellationTokenSource();
     const singleRecordDocument = await ViewerDocument.open(
       singleRecordJsonlUri,

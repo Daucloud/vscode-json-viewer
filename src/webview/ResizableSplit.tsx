@@ -37,7 +37,6 @@ interface ResizableSplitProps {
   minStart: number;
   minEnd: number;
   label: string;
-  maximizedPane?: 'start' | 'end';
   onChange?: (percent: number) => void;
 }
 
@@ -55,7 +54,6 @@ export function ResizableSplit({
   minStart,
   minEnd,
   label,
-  maximizedPane,
   onChange,
 }: ResizableSplitProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -132,9 +130,7 @@ export function ResizableSplit({
     '--split-min-end': `${minEnd}px`,
   };
 
-  const maximizedClass = maximizedPane ? ` split-maximized-${maximizedPane}` : '';
-
-  return <div ref={containerRef} className={`resizable-split ${className}${maximizedClass}`} style={style}>
+  return <div ref={containerRef} className={`resizable-split ${className}`} style={style}>
     {panes[0]}
     <div
       className="splitter"

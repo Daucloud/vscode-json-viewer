@@ -14,7 +14,7 @@ import type {
   SourceSignature,
   WorkerEvent,
 } from './shared/types.js';
-import type { ViewerAction, ViewerEdit } from './shared/webviewProtocol.js';
+import type { ViewerAction, ViewerEdit, ViewerEditResult } from './shared/webviewProtocol.js';
 import type { WorkerResponseData, WorkerSource } from './worker/protocol.js';
 import { WorkerClient, WorkerClientError } from './workerClient.js';
 
@@ -134,12 +134,14 @@ export class ViewerDocument implements vscode.CustomDocument {
 
   private readonly editEmitter = new vscode.EventEmitter<ViewerDocumentEdit>();
   private readonly bootstrapEmitter = new vscode.EventEmitter<DocumentBootstrap>();
+  private readonly stateEmitter = new vscode.EventEmitter<boolean>();
   private readonly workerEventEmitter = new vscode.EventEmitter<WorkerEvent>();
   private readonly externalChangeEmitter = new vscode.EventEmitter<string>();
   private readonly crashEmitter = new vscode.EventEmitter<string>();
 
   readonly onDidEdit = this.editEmitter.event;
   readonly onDidChangeBootstrap = this.bootstrapEmitter.event;
+  readonly onDidChangeState = this.stateEmitter.event;
   readonly onDidReceiveWorkerEvent = this.workerEventEmitter.event;
   readonly onDidDetectExternalChange = this.externalChangeEmitter.event;
   readonly onDidCrash = this.crashEmitter.event;
@@ -407,9 +409,13 @@ export class ViewerDocument implements vscode.CustomDocument {
   }
 
   private setBootstrapResult(result: SessionOpenResult): void {
+    this.updateBootstrapResult(result);
+    this.bootstrapEmitter.fire(this.bootstrapValue);
+  }
+
+  private updateBootstrapResult(result: SessionOpenResult): void {
     const { openResult: _old, dirty: _dirty, ...base } = this.bootstrapValue;
     this.bootstrapValue = { ...base, kind: result.kind, openResult: result, ...(this.dirty ? { dirty: true } : {}) };
-    this.bootstrapEmitter.fire(this.bootstrapValue);
   }
 
   private applyIndexReady(event: IndexReadyEvent): void {
@@ -440,7 +446,7 @@ export class ViewerDocument implements vscode.CustomDocument {
     return queued;
   }
 
-  async applyEdit(edit: ViewerEdit): Promise<void> {
+  async applyEdit(edit: ViewerEdit): Promise<ViewerEditResult> {
     return this.enqueue(async () => {
       if (!this.bootstrapValue.editable || this.text === undefined) throw new WorkerClientError('READ_ONLY', 'Files above the edit limit are read-only.');
       const before = this.text;
@@ -448,11 +454,23 @@ export class ViewerDocument implements vscode.CustomDocument {
       const response = await this.client.request({ type: 'session/applyEdit', sessionId: this.sessionId, edit });
       if (!('edited' in response)) throw new WorkerClientError('INVALID_RESPONSE', 'The worker returned an unexpected edit response.');
       const after = response.text;
-      if (after === before) return;
+      if (after === before) return { applied: true, dirty: this.dirty };
       const result = response.result;
       this.text = after;
       this.dirty = after !== this.savedText;
-      this.setBootstrapResult(result);
+      this.updateBootstrapResult(result);
+      let row;
+      if (result.kind === 'jsonl' && edit.physicalLine !== undefined) {
+        row = result.initialRows.find((candidate) => candidate.physicalLine === edit.physicalLine);
+        if (!row) {
+          const page = await this.client.request({
+            type: 'jsonl/page', sessionId: this.sessionId, queryId: 'default',
+            offset: edit.physicalLine - 1, limit: 1,
+          });
+          if ('rows' in page) row = page.rows[0];
+        }
+      }
+      this.stateEmitter.fire(this.dirty);
       const delta = makeDelta(before, after);
       const label = edit.kind === 'delete' ? 'Delete JSON node' : edit.kind === 'rename' ? 'Rename JSON property' : edit.kind === 'add' ? 'Add JSON node' : 'Edit JSON value';
       this.editEmitter.fire({
@@ -460,6 +478,7 @@ export class ViewerDocument implements vscode.CustomDocument {
         undo: () => this.enqueue(() => this.applyHistoryDelta(delta, true)),
         redo: () => this.enqueue(() => this.applyHistoryDelta(delta, false)),
       });
+      return { applied: true, dirty: this.dirty, ...(row ? { row } : {}) };
     });
   }
 
@@ -472,10 +491,9 @@ export class ViewerDocument implements vscode.CustomDocument {
     this.setBootstrapResult(result);
   }
 
-  async workerRequest(action: ViewerAction, requestId: string): Promise<WorkerResponseData | { applied: true }> {
+  async workerRequest(action: ViewerAction, requestId: string): Promise<WorkerResponseData | ViewerEditResult> {
     if (action.type === 'edit') {
-      await this.applyEdit(action.edit);
-      return { applied: true };
+      return this.applyEdit(action.edit);
     }
     if (action.type === 'cancel') {
       await this.client?.cancel(action.targetRequestId);
@@ -554,7 +572,8 @@ export class ViewerDocument implements vscode.CustomDocument {
         }
         this.savedText = this.text;
         this.dirty = false;
-        this.setBootstrapResult(this.bootstrapValue.openResult!);
+        this.updateBootstrapResult(this.bootstrapValue.openResult!);
+        this.stateEmitter.fire(false);
       } finally {
         this.suppressWatcher = false;
       }
@@ -616,6 +635,7 @@ export class ViewerDocument implements vscode.CustomDocument {
     this.watcher?.dispose();
     this.editEmitter.dispose();
     this.bootstrapEmitter.dispose();
+    this.stateEmitter.dispose();
     this.workerEventEmitter.dispose();
     this.externalChangeEmitter.dispose();
     this.crashEmitter.dispose();

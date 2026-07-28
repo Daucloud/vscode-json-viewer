@@ -11,9 +11,10 @@ import type {
   TreeChildrenResult,
   WorkerEvent,
 } from '../shared/types.js';
-import type { ViewerEdit } from '../shared/webviewProtocol.js';
+import type { ViewerEdit, ViewerEditResult } from '../shared/webviewProtocol.js';
 import { api, RequestError } from './api.js';
 import { Icon } from './Icons.js';
+import { mergeRowFields, replaceRowByPhysicalLine } from './jsonlState.js';
 import { ResizableSplit } from './ResizableSplit.js';
 import { TreeExplorer } from './Tree.js';
 
@@ -110,13 +111,18 @@ export function JsonlView({
   const detailFocusActive = detailMaximized && selected !== undefined;
   useEffect(() => {
     if (!detailFocusActive) return;
+    document.body.classList.add('selected-record-fullscreen-open');
     const restoreOnEscape = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return;
+      if (document.querySelector('.value-viewer-fullscreen')) return;
       event.preventDefault();
       updateDetailMaximized(false);
     };
     window.addEventListener('keydown', restoreOnEscape);
-    return () => window.removeEventListener('keydown', restoreOnEscape);
+    return () => {
+      window.removeEventListener('keydown', restoreOnEscape);
+      document.body.classList.remove('selected-record-fullscreen-open');
+    };
   }, [detailFocusActive, updateDetailMaximized]);
 
   const cancelRowTreeRequest = useCallback((): void => {
@@ -463,7 +469,14 @@ export function JsonlView({
   const columnItems = horizontal.getVirtualItems();
   const selectedRoot = rowRoot?.parent;
   const editRow = async (edit: ViewerEdit): Promise<void> => {
-    await api.request({ type: 'edit', edit });
+    const response = await api.request<ViewerEditResult>({ type: 'edit', edit });
+    if (!response.row) return;
+    const updated = response.row;
+    setRows((previous) => replaceRowByPhysicalLine(previous, updated));
+    setSelected((previous) => previous?.physicalLine === updated.physicalLine
+      ? { ...updated, resultIndex: previous.resultIndex }
+      : previous);
+    setFields((previous) => mergeRowFields(previous, updated));
   };
 
   return <div className="document-view jsonl-view">
@@ -525,7 +538,6 @@ export function JsonlView({
       minStart={240}
       minEnd={240}
       label="Resize records table and row details"
-      {...(detailFocusActive ? { maximizedPane: 'end' as const } : {})}
       onChange={(next) => api.updateState({ jsonlTablePanePercent: next })}
     >
       <section className="table-pane">
@@ -571,12 +583,12 @@ export function JsonlView({
           {total === 0 && <div className="table-empty"><div className="empty-icon"><Icon name="search" size={20} /></div><strong>No matching records</strong><span>Adjust the query or reset the current filters.</span></div>}
         </div>
       </section>
-      <aside className="row-detail">
+      <aside className={detailFocusActive ? 'row-detail row-detail-fullscreen' : 'row-detail'} aria-label="Selected JSONL record">
         {!selected && <div className="empty-state"><div className="empty-illustration"><Icon name="braces" size={22} /></div><div><strong>Select a record</strong><span>Its complete JSON tree will appear here.</span></div></div>}
         {selected && <div className="row-detail-header">
           <div className="record-identity"><span className="eyebrow">Selected record</span><div className="record-title">Line {selected.physicalLine.toLocaleString()}<span className={`status-pill status-${selected.status}`}><span className="status-orb" />{selected.status}</span></div></div>
           <div className="row-detail-actions">
-            <button className="subtle-button" title={detailFocusActive ? 'Restore records table' : 'Maximize selected record'} aria-pressed={detailFocusActive} onClick={() => updateDetailMaximized(!detailFocusActive)}><Icon name={detailFocusActive ? 'restore' : 'maximize'} />{detailFocusActive ? 'Restore' : 'Maximize'}</button>
+            <button className={detailFocusActive ? 'primary' : 'subtle-button'} title={detailFocusActive ? 'Exit full-screen record viewer (Esc)' : 'View selected record full screen'} aria-pressed={detailFocusActive} onClick={() => updateDetailMaximized(!detailFocusActive)}><Icon name={detailFocusActive ? 'restore' : 'maximize'} />{detailFocusActive ? 'Exit full screen' : 'Full screen'}</button>
             <button className="subtle-button" onClick={() => api.command({ type: 'openAsText', physicalLine: selected.physicalLine, ...(selected.diagnostic?.column !== undefined ? { column: selected.diagnostic.column } : {}) })}><Icon name="external" />Open source</button>
           </div>
         </div>}

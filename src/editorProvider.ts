@@ -50,6 +50,7 @@ export class ViewerEditorProvider implements vscode.CustomEditorProvider<ViewerD
       else this.setActive(panel);
     }));
     subscriptions.push(document.onDidChangeBootstrap((bootstrap) => post(panel, { type: 'bootstrap', data: bootstrap })));
+    subscriptions.push(document.onDidChangeState((dirty) => post(panel, { type: 'documentState', dirty })));
     subscriptions.push(document.onDidReceiveWorkerEvent((event) => post(panel, { type: 'workerEvent', data: event })));
     subscriptions.push(document.onDidDetectExternalChange((message) => post(panel, { type: 'externalChange', message })));
     subscriptions.push(document.onDidCrash((message) => post(panel, { type: 'workerCrash', message })));

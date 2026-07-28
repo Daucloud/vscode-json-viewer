@@ -2,6 +2,7 @@ import type {
   DocumentBootstrap,
   JsonEditOperation,
   JsonPath,
+  JsonlRow,
   JsonlQuerySpec,
   WorkerEvent,
   WorkerFailure,
@@ -9,6 +10,12 @@ import type {
 import type { WorkerResponseData } from '../worker/protocol.js';
 
 export type ViewerEdit = JsonEditOperation;
+
+export interface ViewerEditResult {
+  applied: true;
+  dirty: boolean;
+  row?: JsonlRow;
+}
 
 export type ViewerAction =
   | { type: 'json/children'; pointer: string; offset: number; limit: number }
@@ -34,7 +41,8 @@ export type WebviewToHostMessage =
 
 export type HostToWebviewMessage =
   | { type: 'bootstrap'; data: DocumentBootstrap }
-  | { type: 'response'; requestId: string; ok: true; data: WorkerResponseData | { applied: true } | { acknowledged: true } }
+  | { type: 'documentState'; dirty: boolean }
+  | { type: 'response'; requestId: string; ok: true; data: WorkerResponseData | ViewerEditResult | { acknowledged: true } }
   | { type: 'response'; requestId: string; ok: false; error: WorkerFailure }
   | { type: 'workerEvent'; data: WorkerEvent }
   | { type: 'externalChange'; message: string }
