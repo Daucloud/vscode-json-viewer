@@ -1,32 +1,32 @@
-# 安全策略
+# Security Policy
 
-## 支持范围
+## Supported versions
 
-安全修复面向当前 Marketplace 最新版本。旧版本用户应先升级并确认问题是否仍然存在。
+Security fixes target the latest stable version available on the VS Code Marketplace. If you use an older version, upgrade first and confirm that the issue still occurs.
 
-## 私密报告漏洞
+## Reporting a vulnerability privately
 
-请使用 GitHub 的 [Private vulnerability reporting](https://github.com/daucloud/vscode-json-viewer/security/advisories/new) 提交安全问题，不要先创建公开 Issue。
+Use GitHub [Private vulnerability reporting](https://github.com/daucloud/vscode-json-viewer/security/advisories/new) for security issues. Do not open a public issue before the report has been assessed.
 
-报告中请尽量包含：
+Please include, where possible:
 
-- 受影响的扩展和 VS Code 版本；
-- 本地、Remote Workspace 或虚拟文件系统环境；
-- 最小复现文件或生成方式；
-- 预期影响与可观察结果；
-- 已知缓解方式。
+- the affected extension and VS Code versions;
+- whether the issue occurs locally, in a Remote Workspace, or on a virtual file system;
+- a minimal reproducer or a safe way to generate one;
+- the expected impact and observable result;
+- any known mitigations.
 
-请勿提交真实凭据、个人信息或生产数据。若复现依赖敏感样本，请先说明数据结构，再协商安全传输方式。
+Do not submit real credentials, personal information, or production data. If reproduction depends on a sensitive sample, describe its structure first so a safe transfer method can be arranged.
 
-收到报告后，维护者会尽快确认、评估影响并协调修复与披露时间。修复发布前请避免公开利用细节。
+The maintainer will acknowledge the report, assess impact, and coordinate remediation and disclosure timing as soon as practical. Please avoid publishing exploit details before a fix is available.
 
-## 安全边界
+## Security boundaries
 
-扩展不执行工作区代码，不发送遥测或文件内容，也不加载远程 Webview 资源。大型文件解析和查询在有内存上限的 Worker 中运行；异常只应降级当前预览。
+The extension does not execute workspace code, send telemetry or file content, or load remote Webview resources. Large-file parsing and queries run in memory-limited workers; a worker failure should degrade only the active preview.
 
-以下情况通常不属于安全漏洞，但仍欢迎通过公开 Issue 反馈：
+The following are generally not considered security vulnerabilities, though public bug reports are still welcome:
 
-- 超出文档大小或行长上限后的性能下降；
-- 不受支持的编码或 `vscode.dev` Web Extension；
-- 已明确提示的非法 JSON/JSONL 输入；
-- 仅影响展示、不导致数据泄露、内容执行或文件损坏的问题。
+- performance degradation beyond documented file-size or line-length limits;
+- unsupported encodings or the unsupported `vscode.dev` Web Extension environment;
+- malformed JSON/JSONL input that is already reported as invalid;
+- display-only defects that cannot cause data disclosure, content execution, or file corruption.

@@ -5,7 +5,7 @@
 <h1 align="center">Fast JSON & JSONL Viewer</h1>
 
 <p align="center">
-  English · <a href="https://github.com/daucloud/vscode-json-viewer/blob/main/README.zh-CN.md">简体中文</a>
+  English · <a href="https://github.com/daucloud/vscode-json-viewer/blob/main/README.zh-CN.md">Simplified Chinese</a>
 </p>
 
 <p align="center">
@@ -43,13 +43,13 @@ These screenshots show the extension running in a real VS Code Extension Develop
 
 ![JSON lazy tree and Inspector](media/readme-json-tree.jpg)
 
-Only visible tree nodes stay mounted. The Inspector shows the selected value's JSON Pointer, type, child count, and preview, with actions for copying, source navigation, and editing.
+Only visible tree nodes stay mounted. The Inspector shows the selected value's JSON Pointer, type, child count, and formatted Value Viewer, with actions for full-screen inspection, copying, source navigation, and editing.
 
 ### JSONL: virtual table and per-record JSON tree
 
 ![JSONL virtual table and row Inspector](media/readme-jsonl-table.jpg)
 
-The table is virtualized both vertically and horizontally. Select a record to explore its complete structure in a JSON-style tree. The Selected record pane starts with a generous 38% share, can be maximized without losing tree state, and both nested splits remain freely resizable.
+The table is virtualized both vertically and horizontally. Select a record to explore its complete structure in a JSON-style tree. The Selected record pane starts with a generous 38% share, can cover the complete Viewer in full-screen mode without losing tree state, and both nested splits remain freely resizable.
 
 ## Features
 
@@ -57,7 +57,7 @@ The table is virtualized both vertically and horizontally. Select a record to ex
 
 - Lazy-loaded, virtualized, syntax-colored JSON tree. Object and array children are requested in pages of up to 200 items.
 - Search keys and values, expand to a chosen depth, collapse everything, or use **Expand all** with a safety limit.
-- Inspector with JSON Pointer, type, child count, and value preview, plus copy path, copy value, and source navigation actions.
+- Inspector with JSON Pointer, type, child count, and a formatted Value Viewer, plus full-screen inspection, copy path, copy value, and source navigation actions.
 - Keeps the standard text editor as the default for JSON. Right-click and choose **Open With → Fast JSON Viewer**, or run **Fast JSON Viewer: Open in Fast JSON Viewer**.
 - Edit small files: change values, rename keys, add or remove nodes, undo/redo, Save, Save As, and restore Hot Exit backups.
 - Preserves the original literal for unsafe integers, so `900719925474099312345` is never displayed as a rounded approximation.
@@ -68,7 +68,7 @@ The table is virtualized both vertically and horizontally. Select a record to ex
 - Virtualized table with schema sampling, resizable columns, keyboard navigation, and restored scroll position, while keeping the mounted DOM small.
 - Full-text search over raw records and JSON Pointer field filters for equality, inequality, containment, comparison, existence, and null checks.
 - Writes query matches to a temporary disk index for paging, progress reporting, and cancellation instead of keeping every result in memory.
-- Opens any selected record as a complete JSON tree. Maximize the Selected record pane for focused inspection, press `Esc` to restore the table, and keep expanded branches intact while resizing.
+- Opens any selected record as a complete JSON tree. View Selected record full screen for focused inspection, press `Esc` to restore the table, and keep expanded branches intact while resizing.
 - Opens a valid single-record JSONL/NDJSON file directly as a regular JSON tree; malformed single records remain isolated in the JSONL diagnostic view.
 - Large files are read-only and never loaded wholesale into the extension host or Webview. If the source changes externally, stale indexing stops immediately and the viewer asks to refresh.
 
@@ -105,10 +105,10 @@ npm ci
 npm run package
 ```
 
-Install the generated `vscode-json-viewer-0.2.0.vsix` (use the actual output version), or run:
+Install the generated `.vsix` file, or run this from a shell in the repository root:
 
 ```bash
-code --install-extension ./vscode-json-viewer-0.2.0.vsix
+code --install-extension ./vscode-json-viewer-*.vsix
 ```
 
 ### Open a file
