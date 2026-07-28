@@ -30,11 +30,12 @@ function lineAt(text: string, physicalLine: number): LineSlice {
   return { start, end, text: text.slice(start, end) };
 }
 
-export function applyJsonEdit(source: string, edit: JsonEditOperation): string {
+export function applyJsonEdit(source: string, edit: JsonEditOperation, compact = false): string {
   const bom = source.charCodeAt(0) === 0xfeff ? '\ufeff' : '';
   const text = bom ? source.slice(1) : source;
   const path = [...edit.path] as JSONPath;
-  const options = { formattingOptions: formattingFor(text) };
+  const formattingOptions = compact ? undefined : formattingFor(text);
+  const options = formattingOptions ? { formattingOptions } : {};
   let result: string;
 
   if (edit.kind === 'rename') {
@@ -50,7 +51,7 @@ export function applyJsonEdit(source: string, edit: JsonEditOperation): string {
     }
     const value = getNodeValue(node) as unknown;
     const removed = applyEdits(text, modify(text, path, undefined, options));
-    result = applyEdits(removed, modify(removed, [...parentPath, edit.newKey], value, { formattingOptions: formattingFor(removed) }));
+    result = applyEdits(removed, modify(removed, [...parentPath, edit.newKey], value, compact ? {} : { formattingOptions: formattingFor(removed) }));
   } else {
     const value = edit.kind === 'delete' ? undefined : edit.value;
     result = applyEdits(text, modify(text, path, value, {
@@ -65,6 +66,10 @@ export function applyDocumentEdit(source: string, kind: 'json' | 'jsonl', edit: 
   if (kind !== 'jsonl') return applyJsonEdit(source, edit);
   if (edit.physicalLine === undefined) throw new PreviewError('LINE_REQUIRED', 'Select a JSONL record before editing.');
   const line = lineAt(source, edit.physicalLine);
-  const revised = applyJsonEdit(line.text, edit);
+  // A JSONL record must remain one physical line. Supplying formatting options
+  // to jsonc-parser pretty-prints additions and turns one valid record into
+  // several invalid rows (the first one is often just "{"). Its compact edit
+  // mode preserves the surrounding source while keeping inserted values inline.
+  const revised = applyJsonEdit(line.text, edit, true);
   return `${source.slice(0, line.start)}${revised}${source.slice(line.end)}`;
 }

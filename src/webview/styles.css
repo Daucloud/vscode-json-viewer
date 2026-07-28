@@ -321,7 +321,20 @@ body.resizing-columns, body.resizing-columns * { cursor: col-resize !important; 
 .stat-card { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 8px 9px; border: 1px solid var(--viewer-border-soft); border-radius: var(--viewer-radius); background: color-mix(in srgb, var(--viewer-surface) 78%, transparent); }
 .stat-card span { color: var(--vscode-descriptionForeground); font-size: 9px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; }
 .stat-card strong { overflow: hidden; color: var(--vscode-foreground); font-family: var(--vscode-editor-font-family); font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.value-preview { max-height: 96px; margin: 0; padding: 8px 9px; overflow: auto; border: 1px solid var(--viewer-border-soft); border-radius: var(--viewer-radius); background: var(--vscode-textCodeBlock-background, var(--viewer-surface-sunken)); font-family: var(--vscode-editor-font-family); font-size: 11px; font-style: normal; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.value-viewer-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+.value-viewer-heading .meta-label { margin: 0; }
+.value-viewer-heading button { width: 25px; min-width: 25px; min-height: 24px; padding: 0; }
+.value-viewer { max-height: 132px; margin: 0; padding: 9px 10px; overflow: auto; border: 1px solid var(--viewer-border-soft); border-radius: var(--viewer-radius); background: var(--vscode-textCodeBlock-background, var(--viewer-surface-sunken)); font-family: var(--vscode-editor-font-family); font-size: 11px; font-style: normal; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.value-viewer-note { display: flex; align-items: flex-start; gap: 5px; margin-top: 6px; color: var(--vscode-descriptionForeground); font-size: 9px; line-height: 1.4; }
+.value-viewer-note .ui-icon { flex: 0 0 auto; width: 12px; height: 12px; margin-top: 1px; }
+.value-viewer-fullscreen { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; min-width: 0; min-height: 0; color: var(--vscode-editor-foreground); background: var(--vscode-editor-background); }
+.value-viewer-fullscreen-header { display: flex; align-items: center; gap: 14px; flex: 0 0 auto; min-height: 64px; padding: 10px 14px; border-bottom: 1px solid var(--viewer-border); background: linear-gradient(180deg, var(--viewer-surface-raised), var(--viewer-surface)); box-shadow: 0 3px 14px color-mix(in srgb, #000 10%, transparent); }
+.value-viewer-title { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+.value-viewer-title > div { display: flex; flex-direction: column; min-width: 0; }
+.value-viewer-title strong { overflow: hidden; color: var(--vscode-foreground); font-family: var(--vscode-editor-font-family); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.value-viewer-fullscreen-actions { display: flex; align-items: center; gap: 7px; }
+.value-viewer-fullscreen-content { flex: 1; min-width: 0; min-height: 0; margin: 0; padding: clamp(16px, 3vw, 38px); overflow: auto; border: 0; background: var(--vscode-textCodeBlock-background, var(--viewer-surface-sunken)); font-family: var(--vscode-editor-font-family); font-size: max(13px, var(--vscode-editor-font-size)); line-height: 1.65; tab-size: 2; white-space: pre-wrap; overflow-wrap: anywhere; }
+body.value-viewer-open, body.selected-record-fullscreen-open { overflow: hidden; }
 .inspector-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; margin-bottom: 9px; }
 .inspector-actions button { min-width: 0; }
 .copy-notice, .inline-error, .inline-note { display: flex; align-items: flex-start; gap: 7px; margin: 8px 0; padding: 7px 8px; border: 1px solid var(--viewer-border-soft); border-radius: var(--viewer-radius); color: var(--vscode-descriptionForeground); background: var(--viewer-surface); font-size: 10px; line-height: 1.4; }
@@ -407,6 +420,9 @@ body.resizing-columns, body.resizing-columns * { cursor: col-resize !important; 
 
 /* Selected JSONL record */
 .row-detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--vscode-editor-background); }
+.row-detail-fullscreen { position: fixed; inset: 0; z-index: 900; width: 100vw; height: 100vh; border: 0 !important; background: var(--vscode-editor-background); box-shadow: 0 0 0 1px var(--viewer-border), 0 12px 48px color-mix(in srgb, #000 28%, transparent); }
+.row-detail-fullscreen .row-detail-header { min-height: 64px; padding-inline: 14px; box-shadow: 0 3px 14px color-mix(in srgb, #000 10%, transparent); }
+.row-detail-fullscreen > .tree-explorer { flex: 1; }
 .row-detail-header { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; min-height: 58px; padding: 8px 10px; border-bottom: 1px solid var(--viewer-border); background: linear-gradient(180deg, var(--viewer-surface-raised), var(--viewer-surface)); }
 .record-identity { min-width: 0; flex: 1; }
 .row-detail-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
@@ -475,21 +491,11 @@ body.resizing-columns, body.resizing-columns * { cursor: col-resize !important; 
   .visible-count { display: none; }
 }
 
-/* Focus one pane without unmounting it, preserving virtualized tree state. */
-.resizable-split.split-maximized-start,
-.resizable-split.split-maximized-end { display: block; }
-.resizable-split.split-maximized-start > .splitter,
-.resizable-split.split-maximized-start > :last-child,
-.resizable-split.split-maximized-end > .splitter,
-.resizable-split.split-maximized-end > :first-child { display: none; }
-.resizable-split.split-maximized-start > :first-child,
-.resizable-split.split-maximized-end > :last-child { width: 100%; height: 100%; }
-
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0s !important; animation-duration: 0s !important; animation-iteration-count: 1 !important; }
 }
 
 @media (forced-colors: active) {
-  button, input, select, textarea, .pointer-field, .stat-card, .edit-section, .fallback-card, .preview-card { border-color: CanvasText; }
+  button, input, select, textarea, .pointer-field, .stat-card, .edit-section, .fallback-card, .preview-card, .value-viewer, .value-viewer-fullscreen { border-color: CanvasText; }
   .tree-row.selected, .table-row.selected .field-cell, .table-row.selected .line-cell { outline: 1px solid Highlight; }
 }

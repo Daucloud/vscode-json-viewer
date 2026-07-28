@@ -1,4 +1,4 @@
-import type { HostToWebviewMessage, ViewerAction, WebviewToHostMessage } from '../shared/webviewProtocol.js';
+import type { HostToWebviewMessage, ViewerAction, ViewerEditResult, WebviewToHostMessage } from '../shared/webviewProtocol.js';
 import type { DocumentBootstrap, WorkerEvent, WorkerFailure } from '../shared/types.js';
 import type { WorkerResponseData } from '../worker/protocol.js';
 
@@ -38,7 +38,7 @@ export class RequestError extends Error {
   }
 }
 
-type ResponseData = WorkerResponseData | { applied: true } | { acknowledged: true };
+type ResponseData = WorkerResponseData | ViewerEditResult | { acknowledged: true };
 
 class WebviewApi {
   private readonly vscode = acquireVsCodeApi<PersistedState>();
@@ -46,6 +46,7 @@ class WebviewApi {
   private stateTimer: number | undefined;
   private readonly pending = new Map<string, { resolve: (data: ResponseData) => void; reject: (error: RequestError) => void }>();
   private readonly bootstrapListeners = new Set<(bootstrap: DocumentBootstrap) => void>();
+  private readonly documentStateListeners = new Set<(dirty: boolean) => void>();
   private readonly eventListeners = new Set<(event: WorkerEvent) => void>();
   private readonly notificationListeners = new Set<(message: string, kind: NotificationKind) => void>();
 
@@ -94,6 +95,11 @@ class WebviewApi {
     return () => this.eventListeners.delete(listener);
   }
 
+  onDocumentState(listener: (dirty: boolean) => void): () => void {
+    this.documentStateListeners.add(listener);
+    return () => this.documentStateListeners.delete(listener);
+  }
+
   onNotification(listener: (message: string, kind: NotificationKind) => void): () => void {
     this.notificationListeners.add(listener);
     return () => this.notificationListeners.delete(listener);
@@ -120,6 +126,10 @@ class WebviewApi {
     }
     if (message.type === 'workerEvent') {
       for (const listener of this.eventListeners) listener(message.data);
+      return;
+    }
+    if (message.type === 'documentState') {
+      for (const listener of this.documentStateListeners) listener(message.dirty);
       return;
     }
     if (message.type === 'externalChange' || message.type === 'workerCrash') {

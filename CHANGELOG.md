@@ -6,6 +6,19 @@
 
 暂无已发布变更。
 
+## 0.2.1 — 2026-07-28
+
+### 查看体验
+
+- 将 Inspector 中的 Value Preview 升级为格式化的 Value Viewer，并支持覆盖整个 Webview 的全屏查看与 `Esc` 退出。
+- Selected record 的全屏模式现在覆盖完整 Viewer，而不再只是扩大分栏中的详情区域。
+
+### 编辑可靠性
+
+- Apply Value、Add、Delete 和 Rename 完成后仅刷新受影响的节点、容器页或 JSONL 表格行，不再重建整个 Viewer，保留展开、选中与滚动状态。
+- 使用独立的轻量文档状态消息更新 dirty 标记，避免编辑后触发完整 bootstrap。
+- 修复 JSONL 添加属性或数组项时被格式化为多行、继而产生 `Expected property name or '}'` 诊断的问题；编辑后的记录始终保持单行。
+
 ## 0.2.0 — 2026-07-28
 
 ### JSONL 体验

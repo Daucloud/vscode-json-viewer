@@ -35,15 +35,4 @@ describe('ResizableSplit component', () => {
       globalThis.ResizeObserver = previous;
     }
   });
-
-  it('keeps both pane trees mounted while focusing the end pane', () => {
-    const view = render(React.createElement(ResizableSplit, {
-      className: 'test-split', defaultPercent: 62, minStart: 240, minEnd: 240,
-      label: 'Test split', maximizedPane: 'end',
-      children: [React.createElement('section', { key: 'start' }, 'Records'), React.createElement('aside', { key: 'end' }, 'Selected record')],
-    }));
-    expect(view.container.firstElementChild?.classList.contains('split-maximized-end')).toBe(true);
-    expect(view.getByText('Records')).toBeTruthy();
-    expect(view.getByText('Selected record')).toBeTruthy();
-  });
 });
