@@ -43,13 +43,13 @@ Fast JSON & JSONL Viewer 是一个为真实数据文件设计的 VS Code 查看�
 
 ![JSON lazy tree and Inspector](media/readme-json-tree.jpg)
 
-树区域只保留当前可见节点；右侧 Inspector 同时展示 JSON Pointer、类型、子节点数量、值预览以及复制、源码定位和编辑入口。
+树区域只保留当前可见节点；右侧 Inspector 同时展示 JSON Pointer、类型、子节点数量和格式化 Value Viewer，并提供全屏查看、复制、源码定位和编辑入口。
 
 ### JSONL：虚拟表格 + 单行 JSON 树
 
 ![JSONL virtual table and row Inspector](media/readme-jsonl-table.jpg)
 
-表格同时支持纵向和横向虚拟化。点击记录后，右侧可以像 JSON Viewer 一样展开该行的完整结构；Selected record 默认占 38% 宽度，可在不丢失树状态的情况下最大化，并且两层分隔条都能在更大范围内自由拖动。
+表格同时支持纵向和横向虚拟化。点击记录后，右侧可以像 JSON Viewer 一样展开该行的完整结构；Selected record 默认占 38% 宽度，可在不丢失树状态的情况下全屏覆盖整个 Viewer，并且两层分隔条都能在更大范围内自由拖动。
 
 ## 核心能力
 
@@ -57,7 +57,7 @@ Fast JSON & JSONL Viewer 是一个为真实数据文件设计的 VS Code 查看�
 
 - 懒加载、虚拟化的彩色 JSON 树；对象和数组按页请求子项，单页最多 200 项。
 - 搜索键名和值，按深度展开、全部收起，以及带安全上限的 **Expand all**。
-- Inspector 显示 JSON Pointer、类型、子节点数量和值预览；支持复制路径、复制值和定位源码。
+- Inspector 显示 JSON Pointer、类型、子节点数量和格式化 Value Viewer；支持全屏查看、复制路径、复制值和定位源码。
 - 默认不抢占普通 JSON 的打开方式：右键 **Open With → Fast JSON Viewer**，或运行 **Fast JSON Viewer: Open in Fast JSON Viewer**。
 - 小文件可编辑：修改值、重命名键、添加/删除节点、撤销/重做、Save、Save As 和 Hot Exit 备份。
 - 保留不安全整数的原始字面量，例如 `900719925474099312345` 不会被舍入成近似值。
@@ -68,7 +68,7 @@ Fast JSON & JSONL Viewer 是一个为真实数据文件设计的 VS Code 查看�
 - 虚拟化表格支持字段采样、列宽调整、行键盘导航和滚动位置恢复，常驻 DOM 行数保持很小。
 - 原始行全文搜索；按 JSON Pointer 进行等于、不等于、包含、比较、存在和空值过滤。
 - 查询结果写入临时磁盘索引，支持分页、进度展示和取消，不在内存保存全部命中行。
-- 点击行后在详情树中查看完整 JSON；可最大化 Selected record 专注检查，按 `Esc` 恢复表格，调整窗口时已展开分支不会丢失。
+- 点击行后在详情树中查看完整 JSON；可全屏查看 Selected record，按 `Esc` 恢复表格，调整窗口时已展开分支不会丢失。
 - 只有一条合法记录的 JSONL/NDJSON 自动按普通 JSON 树打开；非法单条记录仍留在 JSONL 诊断视图中独立标红。
 - 超大文件默认只读，源文件不会整体传入扩展宿主或 Webview；检测到外部修改会立即停止旧索引并提示刷新。
 
@@ -105,10 +105,10 @@ npm ci
 npm run package
 ```
 
-然后在 VS Code 中安装生成的 `vscode-json-viewer-0.2.0.vsix`（文件名以实际输出为准），或执行：
+然后在 VS Code 中安装生成的 `.vsix` 文件，或在仓库根目录执行：
 
 ```bash
-code --install-extension ./vscode-json-viewer-0.2.0.vsix
+code --install-extension ./vscode-json-viewer-*.vsix
 ```
 
 ### 打开文件

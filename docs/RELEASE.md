@@ -1,123 +1,149 @@
-# 发布清单
+# Release Checklist
 
-这份清单用于将 `Fast JSON & JSONL Viewer` 从本地工作区交付为可审阅、可安装、可回滚的 VS Code 扩展。
+Use this checklist to turn a local Fast JSON & JSONL Viewer checkout into a reviewable, installable, and reversible VS Code extension release.
 
-## 当前状态
+## Release identity
 
-- 扩展版本：`0.2.0`
-- 包名：`vscode-json-viewer`
-- Publisher：`daucloud`
-- 许可证：MIT
-- 目标运行环境：桌面和 Remote Workspace Extension Host
-- GitHub：`https://github.com/daucloud/vscode-json-viewer`
-- Marketplace 扩展 ID：`daucloud.vscode-json-viewer`
+- Version source of truth: `package.json`
+- Package name: `vscode-json-viewer`
+- Publisher: `daucloud`
+- License: MIT
+- Runtime: desktop and Remote Workspace Extension Hosts
+- GitHub repository: `https://github.com/daucloud/vscode-json-viewer`
+- Marketplace extension ID: `daucloud.vscode-json-viewer`
 
-## 1. 发布前冻结
+## 1. Freeze the release scope
 
-1. 确认 `package.json`、`README.md`、`CHANGELOG.md` 和 `LICENSE` 中的版本、名称和许可证一致。
-2. 确认截图、图标和 `syntaxes/` 已纳入仓库；不要把测试数据、凭据、临时索引或本地 `.vsix` 提交进去。
-3. 检查工作区是否存在与本次文档无关的未提交修改；先由负责人决定保留、提交或拆分，发布包不要意外带入这些改动。
-4. 逐项阅读 [`README.md`](../README.md) 的兼容性、大小阈值和性能说明，确保没有把本机基准误写成硬性承诺。
+1. Confirm that the version, product name, publisher, and license agree across `package.json`, `README.md`, `CHANGELOG.md`, and `LICENSE`.
+2. Confirm that screenshots, the extension icon, and `syntaxes/` are committed. Do not commit generated test data, credentials, temporary indexes, or local `.vsix` files.
+3. Inspect the working tree for unrelated changes. The release owner must explicitly keep, split, or remove them before packaging.
+4. Re-read the compatibility, size-limit, and performance sections in [`README.md`](../README.md). Local benchmark samples must not be presented as universal guarantees.
 
-## 2. 本地验证与打包
+## 2. Validate and package locally
 
-依赖和锁文件已经准备好时，不要重复安装；需要重新准备依赖时使用 `npm ci`。
+Do not reinstall dependencies when the existing workspace and lockfile are already prepared. Use `npm ci` only for a clean environment or after dependency changes.
 
 ```bash
 npm ci
 npm run check
 npm test
 npm run test:vscode
-npm run build
+npm run benchmark
 npm run package
 ```
 
-`npm run package` 会再次执行类型检查、单元测试、构建，并调用 `vsce package --no-dependencies` 生成 VSIX。也可以将产物写入临时目录，避免污染仓库：
+`npm run package` repeats type checking, unit tests, and the production build before invoking `vsce package --no-dependencies`. It creates `vscode-json-viewer-X.Y.Z.vsix` in the repository root.
+
+To keep the package outside the repository, derive the filename from `package.json`:
 
 ```bash
-npx vsce package --no-dependencies --out /tmp/fast-json-viewer-0.2.0.vsix
-unzip -l /tmp/fast-json-viewer-0.2.0.vsix
+VERSION=$(node -p "require('./package.json').version")
+npx vsce package --no-dependencies --out "/tmp/vscode-json-viewer-${VERSION}.vsix"
+unzip -l "/tmp/vscode-json-viewer-${VERSION}.vsix"
 ```
 
-核对 VSIX 内容时应看到：
+The VSIX should contain:
 
-- `README.md`、`LICENSE`、`media/icon.png` 和两张 README 截图；
-- `dist/` 和 `syntaxes/`；
-- 不包含 `src/`、`test/`、`.vscode/`、`node_modules/`、源码地图、性能生成文件或本地索引。
+- `README.md`, `CHANGELOG.md`, `LICENSE`, `media/icon.png`, and the two README screenshots;
+- `dist/` and `syntaxes/`;
+- no `src/`, `test/`, `.vscode/`, `node_modules/`, source maps, benchmark fixtures, credentials, or local indexes.
 
-可用 `npx vsce ls` 在打包前预览文件清单。`.vscodeignore` 已将开发文档和源码排除在安装包之外，但发布前仍应通过 `unzip -l` 做最终核对。
+Run `npx vsce ls` to preview the package file list. `.vscodeignore` excludes development-only files, but always perform a final `unzip -l` inspection.
 
-## 3. 安装后的冒烟测试
-
-在干净的 VS Code Profile 或 Extension Development Host 中安装 VSIX：
+Record the package checksum for the GitHub Release:
 
 ```bash
-code --install-extension /tmp/fast-json-viewer-0.2.0.vsix
+VERSION=$(node -p "require('./package.json').version")
+shasum -a 256 "vscode-json-viewer-${VERSION}.vsix"
 ```
 
-至少验证以下路径：
+## 3. Smoke-test the packaged extension
 
-- `.jsonl`、`.ndjson`、`.jsonlines` 双击后进入 JSONL Viewer；`.json` 可通过 **Open With** 进入 JSON Viewer。
-- 小 JSON 修改值、重命名键、添加/删除节点、撤销/重做、Save、Save As，以及关闭后恢复未保存内容。
-- 大 JSON 进入只读懒加载；超过 `maxJsonMB` 的 JSON 显示安全预览并能打开文本。
-- 大 JSONL 首屏迅速出现，索引、全文搜索、JSON Pointer 过滤、取消和外部修改提示均正常。
-- 非法 JSONL 行只标红该行；CRLF、BOM、末行无换行、多字节字符和超长记录行为符合 README。
-- JSON 树、表格/详情和 Inspector 分隔条可拖动、双击复位，刷新/切换标签后状态可恢复。
-- 在不受信任工作区中可以只读查看，扩展不执行任务或调试代码。
+Install the VSIX in a clean VS Code profile:
 
-## 4. 性能门禁
+```bash
+VERSION=$(node -p "require('./package.json').version")
+code --install-extension "vscode-json-viewer-${VERSION}.vsix"
+```
 
-提交发布候选版本前，在本地 SSD 上至少运行：
+Verify at least these paths:
+
+- `.jsonl`, `.ndjson`, and `.jsonlines` open in the JSONL Viewer by default; `.json` opens through **Open With → Fast JSON Viewer**.
+- Small JSON files support value changes, key renames, node additions and deletions, undo/redo, Save, Save As, and restoration of unsaved Hot Exit state.
+- Large JSON files use the read-only lazy tree; files above `maxJsonMB` use the safe preview and can open as text.
+- Large JSONL files show the first page promptly, then support indexing, full-text search, JSON Pointer filtering, cancellation, and external-change warnings.
+- A malformed JSONL row affects only that row. CRLF, BOM, a final line without a newline, multibyte characters, and oversized records behave as documented.
+- JSON tree, table/details, and Tree/Inspector splits support dragging, double-click reset, and keyboard adjustment; state survives refreshes and tab switches.
+- Value Viewer and Selected record full-screen modes open and close correctly with `Esc`.
+- Restricted Mode permits read-only viewing without running tasks, debug configurations, or workspace code.
+
+## 4. Performance gates
+
+Run at least the 100 MiB gate on a local SSD for every release candidate:
 
 ```bash
 npm run benchmark
+```
+
+Run the 10 GiB streaming scenario for scheduled validation or any release that changes indexing, scanning, filtering, cancellation, or large-file I/O:
+
+```bash
 npm run benchmark:10gb
 ```
 
-100 MiB 基准用于每次候选版本检查；本地吞吐目标为 `100 MB/s` 以上，GitHub 共享 runner 使用 `70 MB/s` 的抗抖动下限。10 GiB 基准适合本地或定期运行。记录机器、Node 版本、文件形状和结果，不要直接比较不同硬件上的绝对时间。
+The local throughput target is at least `100 MB/s`; shared GitHub runners use a conservative `70 MB/s` floor. Record the machine, Node.js version, fixture shape, and results. Do not compare absolute timings across different hardware as though they were equivalent.
 
-## 5. Marketplace 发布
+## 5. Commit, review, and merge
 
-正式发布需要一个 Azure DevOps 账号和 Marketplace Publisher：
+1. Update `package.json`, `package-lock.json`, and `CHANGELOG.md` to the same version.
+2. Commit only the intended release files and push a dedicated branch.
+3. Open a pull request describing the user impact, root cause for fixes, compatibility considerations, and validation results.
+4. Wait for macOS, Windows, Linux, Extension Host, packaging, and performance checks to pass.
+5. Merge through the repository's normal protected-branch workflow.
 
-1. 在 [Azure DevOps](https://dev.azure.com/) 登录或创建组织。
-2. 在 [Visual Studio Marketplace 管理页](https://marketplace.visualstudio.com/manage) 创建/确认 Publisher ID `daucloud`，使其与 `package.json` 的 `publisher` 完全一致。
-3. 创建只授予 **Marketplace → Manage** 范围的 Personal Access Token（PAT）。不要把 PAT 写入仓库、README、终端日志或截图。
-4. 在本机通过 `vsce` 登录：
-
-   ```bash
-   npx vsce login daucloud
-   ```
-
-   按提示粘贴 PAT；也可以在受控 CI Secret 中使用 `VSCE_PAT`。
-
-5. 确认版本号已递增、CHANGELOG 已更新、VSIX 已做最终核对后，再执行：
-
-   ```bash
-   npx vsce publish --no-dependencies
-   ```
-
-Marketplace 不允许重复发布同一版本号。若要先做预发布验证，使用单独的预发布版本策略，不要覆盖已经发布的稳定版本。
-
-发布后应在干净 Profile 中按扩展 ID 安装，检查图标、README 图片、命令、默认编辑器优先级以及卸载/升级后的 Hot Exit 行为。
-
-## 6. Git 标签与 GitHub Release
-
-待 Marketplace 冒烟测试通过后，再考虑：
+After merging, update the local default branch and tag the exact merge commit:
 
 ```bash
-git tag -a v0.2.0 -m "Release v0.2.0"
-git push origin v0.2.0
+VERSION=$(node -p "require('./package.json').version")
+git switch main
+git pull --ff-only origin main
+git tag -a "v${VERSION}" -m "Fast JSON Viewer v${VERSION}"
+git push origin "v${VERSION}"
 ```
 
-GitHub Release 可附上与 Marketplace 相同的 VSIX 和变更摘要。推送前确认远端仓库、分支保护、作者信息和许可证显示正确。
+## 6. Publish GitHub and Marketplace releases
 
-## 发布前勾选
+Create a GitHub Release from the verified tag and attach the exact VSIX that passed validation. Include user-facing highlights, validation results, and the SHA-256 checksum.
 
-- [ ] 版本号、Publisher、许可证和变更记录一致
-- [ ] `npm run check`、`npm test`、`npm run test:vscode` 通过
-- [ ] 100 MiB 性能门禁通过；10 GiB 基准已记录（如本次发布要求）
-- [ ] VSIX 文件清单已核对，无源码、凭据、测试数据或临时文件
-- [ ] 本地安装冒烟测试通过
-- [ ] Marketplace Publisher 和 PAT 权限已由负责人复核
-- [ ] 发布后升级、卸载和回滚方案已准备
+Marketplace publishing requires an Azure DevOps account and a matching Marketplace Publisher:
+
+1. Sign in at [Azure DevOps](https://dev.azure.com/) and create an organization if needed.
+2. Open the [Visual Studio Marketplace publisher portal](https://marketplace.visualstudio.com/manage) and confirm Publisher ID `daucloud`, which must exactly match `package.json`.
+3. Create a Personal Access Token with only **Marketplace → Manage** permission. Never place the token in the repository, documentation, terminal logs, or screenshots.
+4. Authenticate locally with `npx vsce login daucloud`, or expose the token as `VSCE_PAT` from a controlled CI secret.
+5. Publish the already-verified package:
+
+   ```bash
+   VERSION=$(node -p "require('./package.json').version")
+   npx vsce publish --packagePath "vscode-json-viewer-${VERSION}.vsix"
+   ```
+
+The Marketplace does not allow an existing version to be overwritten. Any correction after publication requires a new version.
+
+## 7. Verify publication and rollback readiness
+
+- Confirm that the public Marketplace version list includes the new version; catalog propagation can take several minutes.
+- Install by extension ID in a clean profile and verify the icon, README images, commands, editor priorities, and Hot Exit behavior.
+- Confirm that the GitHub tag, Release asset, Marketplace package, and checksum all refer to the same build.
+- Keep the previous stable VSIX and release notes available. If a regression is discovered, unpublish only when necessary and ship a corrected patch version instead of replacing an existing package.
+
+## Final sign-off
+
+- [ ] Version, Publisher, license, and changelog agree
+- [ ] Type check, unit tests, Extension Host tests, and production build pass
+- [ ] 100 MiB performance gate passes; 10 GiB results are recorded when required
+- [ ] VSIX contents and SHA-256 checksum are verified
+- [ ] Packaged-extension smoke test passes in a clean profile
+- [ ] Pull request checks pass and the tagged commit is on `main`
+- [ ] GitHub Release and Marketplace package use the same VSIX
+- [ ] Marketplace installation, upgrade, uninstall, and rollback paths are verified
