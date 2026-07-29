@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   decodePointerSegment,
   encodePointerSegment,
+  jqPathFromPath,
   joinPointer,
   parentPointer,
   pathFromPointer,
@@ -30,5 +31,12 @@ describe('JSON Pointer utilities', () => {
   it('rejects malformed pointers', () => {
     expect(() => pathFromPointer('not-a-pointer')).toThrow(/Invalid JSON Pointer/);
     expect(() => decodePointerSegment('bad~2escape')).toThrow(/Invalid JSON Pointer segment/);
+  });
+
+  it('renders typed paths as expressions that can be pasted into jq', () => {
+    expect(jqPathFromPath([])).toBe('.');
+    expect(jqPathFromPath(['users', 0, 'name'])).toBe('.users[0].name');
+    expect(jqPathFromPath(['0', 'a-b', 'space key'])).toBe('.["0"]["a-b"]["space key"]');
+    expect(jqPathFromPath(['quote"slash\\line\n'])).toBe('.["quote\\"slash\\\\line\\n"]');
   });
 });

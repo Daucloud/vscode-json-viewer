@@ -15,6 +15,27 @@ export function pointerFromPath(path: readonly (string | number)[]): string {
   return path.length === 0 ? '' : `/${path.map(encodePointerSegment).join('/')}`;
 }
 
+/**
+ * Render a typed JSON path as a jq identity-path expression.
+ *
+ * Keep this separate from JSON Pointer: pointers remain the compact internal
+ * protocol used by the lazy tree, while the Inspector can expose a path that
+ * users can paste directly after `jq`.
+ */
+export function jqPathFromPath(path: readonly (string | number)[]): string {
+  let result = '.';
+  for (const segment of path) {
+    if (typeof segment === 'number') {
+      result += `[${segment}]`;
+    } else if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(segment)) {
+      result += `${result === '.' ? '' : '.'}${segment}`;
+    } else {
+      result += `[${JSON.stringify(segment)}]`;
+    }
+  }
+  return result;
+}
+
 export function pathFromPointer(pointer: string): JsonPath {
   if (pointer === '') return [];
   if (!pointer.startsWith('/')) throw new Error(`Invalid JSON Pointer: ${pointer}`);

@@ -4,7 +4,9 @@ All notable changes to this project are documented here. The format is based on 
 
 ## Unreleased
 
-No unreleased changes.
+### Inspector
+
+- Replaced Inspector JSON Pointer output with jq-ready paths while retaining JSON Pointer internally for lazy loading and source navigation.
 
 ## 0.2.2 — 2026-07-28
 

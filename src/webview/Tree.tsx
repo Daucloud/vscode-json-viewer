@@ -1,7 +1,7 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { joinPointer, parentPointer, pathFromPointer, pointerFromPath } from '../shared/pointer.js';
+import { jqPathFromPath, joinPointer, parentPointer, pathFromPointer, pointerFromPath } from '../shared/pointer.js';
 import type { JsonPath } from '../shared/pointer.js';
 import type { TreeChildrenResult, TreeNodeSummary } from '../shared/types.js';
 import type { ViewerEdit } from '../shared/webviewProtocol.js';
@@ -171,6 +171,7 @@ function Inspector({
     catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); }
   };
   const path = typedPath(selected.pointer, entries);
+  const jqPath = jqPathFromPath(path);
   const displayedValue = valueViewerText(selected);
   const withLine = physicalLine === undefined ? {} : { physicalLine };
   const isContainer = selected.type === 'object' || selected.type === 'array';
@@ -215,10 +216,10 @@ function Inspector({
     </div>
     <div className="inspector-content">
       <section className="inspector-section pointer-section">
-        <span className="meta-label">JSON Pointer</span>
+        <span className="meta-label">jq path</span>
         <div className="pointer-field">
-          <code title={selected.pointer || '/'}>{selected.pointer || '/'}</code>
-          <button className="copy-path-button" disabled={copying !== undefined} title="Copy JSON Pointer" aria-label="Copy path" onClick={() => void copy('path', selected.pointer || '/')}>
+          <code title={jqPath}>{jqPath}</code>
+          <button className="copy-path-button" disabled={copying !== undefined} title="Copy jq path" aria-label="Copy jq path" onClick={() => void copy('path', jqPath)}>
             {copying === 'path' ? <span className="button-spinner" /> : <Icon name="copy" />}<span>{copying === 'path' ? 'Copying' : 'Copy'}</span>
           </button>
         </div>
@@ -240,7 +241,7 @@ function Inspector({
 
       {valueViewerFullscreen && createPortal(<section className="value-viewer-fullscreen" role="dialog" aria-modal="true" aria-label={`Value viewer for ${selected.pointer || '/'}`}>
         <header className="value-viewer-fullscreen-header">
-          <div className="value-viewer-title"><span className={`inspector-type-mark type-${selected.type}`}>{typeGlyph(selected)}</span><div><span className="eyebrow">Value viewer</span><strong title={selected.pointer || '/'}>{selected.pointer || '/'}</strong></div></div>
+          <div className="value-viewer-title"><span className={`inspector-type-mark type-${selected.type}`}>{typeGlyph(selected)}</span><div><span className="eyebrow">Value viewer</span><strong title={jqPath}>{jqPath}</strong></div></div>
           <div className="value-viewer-fullscreen-actions">
             <button disabled={selected.raw === undefined || copying !== undefined} onClick={() => void copy('value', selected.raw ?? selected.preview)}><Icon name="copy" />Copy value</button>
             <button className="primary" autoFocus onClick={() => setValueViewerFullscreen(false)}><Icon name="restore" />Exit full screen</button>
