@@ -4,9 +4,12 @@ All notable changes to this project are documented here. The format is based on 
 
 ## Unreleased
 
-### Inspector
+### Inspector and value experience
 
 - Replaced Inspector JSON Pointer output with jq-ready paths while retaining JSON Pointer internally for lazy loading and source navigation.
+- Unified scalar value viewing and editing in one panel, with strict JSON-literal editing and shared inline/full-screen state.
+- Decoded JSON string escapes for natural display and formatted objects/arrays without rounding unsafe integer literals.
+- Added a draggable, keyboard-accessible, persisted Value panel height with double-click reset.
 
 ## 0.2.2 — 2026-07-28
 

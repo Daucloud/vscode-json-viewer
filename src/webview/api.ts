@@ -27,6 +27,7 @@ export interface PersistedState {
   jsonlTablePanePercent?: number;
   treePanePercent?: number;
   jsonlDetailMaximized?: boolean;
+  valueViewerHeight?: number;
 }
 
 export type NotificationKind = 'external' | 'crash' | 'error';

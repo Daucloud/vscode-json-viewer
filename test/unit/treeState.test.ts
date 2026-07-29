@@ -31,9 +31,31 @@ vi.mock('../../src/webview/api.js', () => ({
   },
 }));
 
-const { TreeExplorer } = await import('../../src/webview/Tree.js');
+const { TreeExplorer, valueViewerText } = await import('../../src/webview/Tree.js');
+const { api: mockedApi } = await import('../../src/webview/api.js');
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
+describe('Value presentation', () => {
+  it('decodes standard JSON string escapes for display', () => {
+    const node: TreeNodeSummary = {
+      pointer: '/message', key: 'message', type: 'string', preview: 'message',
+      raw: '"line\\nnext\\t\\"quoted\\"\\\\path\\u263a"', childCount: 0, hasChildren: false,
+    };
+    expect(valueViewerText(node)).toBe('line\nnext\t"quoted"\\path☺');
+  });
+
+  it('formats containers without rounding unsafe integer literals', () => {
+    const node: TreeNodeSummary = {
+      pointer: '', key: 'JSON', type: 'object', preview: '{2 properties}',
+      raw: '{"id":900719925474099312345,"enabled":true}', childCount: 2, hasChildren: true,
+    };
+    expect(valueViewerText(node)).toBe('{\n  "id": 900719925474099312345,\n  "enabled": true\n}');
+  });
+});
 
 describe('TreeExplorer state', () => {
   it('keeps loaded and expanded row data when persisted props change during a resize render', async () => {
@@ -78,10 +100,13 @@ describe('TreeExplorer state', () => {
     const onEdit = vi.fn(async () => undefined);
     const view = render(React.createElement(TreeExplorer, { root, loadChildren, editable: true, onEdit }));
 
+    expect(screen.queryByLabelText('JSON value')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit value' }));
     fireEvent.change(screen.getByLabelText('JSON value'), { target: { value: '2' } });
     fireEvent.click(screen.getByRole('button', { name: /apply value/i }));
 
     await waitFor(() => expect(view.container.querySelector('.node-preview')?.textContent).toBe('2'));
+    expect(screen.queryByLabelText('JSON value')).toBeNull();
     expect(onEdit).toHaveBeenCalledWith({ kind: 'set', path: [], value: 2 });
     expect(loadChildren).toHaveBeenCalledWith('', 0, 200);
     expect(root.raw).toBe('1');
@@ -129,5 +154,27 @@ describe('TreeExplorer state', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Value viewer for /' })).toBeNull());
     view.unmount();
+  });
+
+  it('resizes the unified value panel with the keyboard and persists its height', () => {
+    const root: TreeNodeSummary = {
+      pointer: '', key: 'JSON', type: 'string', preview: 'hello', raw: '"hello"', childCount: 0, hasChildren: false,
+    };
+    render(React.createElement(TreeExplorer, {
+      root,
+      loadChildren: vi.fn(async () => ({ parentPointer: '', parent: root, offset: 0, total: 0, children: [] })),
+      editable: true,
+    }));
+
+    const resizeHandle = screen.getByRole('separator', { name: 'Resize value panel' });
+    expect(resizeHandle.getAttribute('aria-valuenow')).toBe('220');
+    fireEvent.keyDown(resizeHandle, { key: 'ArrowDown' });
+    expect(resizeHandle.getAttribute('aria-valuenow')).toBe('228');
+    expect(mockedApi.updateState).toHaveBeenCalledWith({ valueViewerHeight: 228 });
+
+    fireEvent.doubleClick(resizeHandle);
+    expect(resizeHandle.getAttribute('aria-valuenow')).toBe('220');
+    expect(screen.getAllByText('Value')).toHaveLength(1);
+    expect(document.querySelector('.edit-section')).toBeNull();
   });
 });

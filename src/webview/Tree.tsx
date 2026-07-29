@@ -1,4 +1,5 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { applyEdits, format as formatJson } from 'jsonc-parser';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { jqPathFromPath, joinPointer, parentPointer, pathFromPointer, pointerFromPath } from '../shared/pointer.js';
@@ -29,6 +30,14 @@ type VisibleItem =
 // viewer's responsiveness for large collections.
 const EXPAND_ALL_NODE_LIMIT = 20_000;
 const EXPAND_PROGRESS_INTERVAL = 24;
+const DEFAULT_VALUE_VIEWER_HEIGHT = 220;
+const MIN_VALUE_VIEWER_HEIGHT = 96;
+const MAX_VALUE_VIEWER_HEIGHT = 640;
+
+function clampValueViewerHeight(height: number): number {
+  if (!Number.isFinite(height)) return DEFAULT_VALUE_VIEWER_HEIGHT;
+  return Math.min(MAX_VALUE_VIEWER_HEIGHT, Math.max(MIN_VALUE_VIEWER_HEIGHT, Math.round(height)));
+}
 
 function yieldToBrowser(): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, 0));
@@ -79,8 +88,21 @@ function parseValue(input: string): unknown {
 export function valueViewerText(node: TreeNodeSummary): string {
   const raw = node.raw;
   if (raw === undefined) return node.preview;
+  if (node.type === 'string') {
+    try {
+      const decoded = JSON.parse(raw) as unknown;
+      return typeof decoded === 'string' ? decoded : raw;
+    } catch {
+      return raw;
+    }
+  }
   if (node.type !== 'object' && node.type !== 'array') return raw;
-  try { return JSON.stringify(JSON.parse(raw) as unknown, null, 2); }
+  try {
+    // jsonc-parser's formatter only inserts/removes whitespace. Unlike a
+    // JSON.parse/JSON.stringify round trip, it keeps every numeric literal
+    // byte-for-byte, including integers beyond JavaScript's safe range.
+    return applyEdits(raw, formatJson(raw, undefined, { insertSpaces: true, tabSize: 2, eol: '\n' }));
+  }
   catch { return raw; }
 }
 
@@ -133,8 +155,18 @@ function Inspector({
   const [copying, setCopying] = useState<'path' | 'value'>();
   const [copyNotice, setCopyNotice] = useState<{ kind: 'success' | 'error'; message: string }>();
   const [valueViewerFullscreen, setValueViewerFullscreen] = useState(false);
+  const [valueEditing, setValueEditing] = useState(false);
+  const [valueViewerHeight, setValueViewerHeight] = useState(() => clampValueViewerHeight(api.state().valueViewerHeight ?? DEFAULT_VALUE_VIEWER_HEIGHT));
+  const valueViewerHeightRef = useRef(valueViewerHeight);
+  const activeValueResize = useRef<{ pointerId: number; startY: number; startHeight: number; target: HTMLElement } | undefined>(undefined);
   const copyNoticeTimer = useRef<number | undefined>(undefined);
   const parent = selected.pointer === '' ? undefined : entries.get(parentPointer(selected.pointer) ?? '')?.node;
+
+  const cancelValueEdit = useCallback((): void => {
+    setValueText(selected.raw ?? selected.preview);
+    setValueEditing(false);
+    setError(undefined);
+  }, [selected.preview, selected.raw]);
 
   useEffect(() => {
     setValueText(selected.raw ?? selected.preview);
@@ -142,10 +174,44 @@ function Inspector({
     setError(undefined);
     setCopyNotice(undefined);
     setValueViewerFullscreen(false);
-  }, [selected]);
+    setValueEditing(false);
+  }, [selected.pointer]);
 
-  useEffect(() => () => {
-    if (copyNoticeTimer.current !== undefined) window.clearTimeout(copyNoticeTimer.current);
+  useEffect(() => {
+    // A successful edit replaces the selected summary object in place. Keep a
+    // full-screen session open, but refresh its literal once edit mode ends.
+    if (!valueEditing) setValueText(selected.raw ?? selected.preview);
+    setNewKey(selected.key);
+  }, [selected.key, selected.preview, selected.raw, valueEditing]);
+
+  useEffect(() => {
+    const resizeValueViewer = (event: PointerEvent): void => {
+      const active = activeValueResize.current;
+      if (!active || active.pointerId !== event.pointerId) return;
+      const next = clampValueViewerHeight(active.startHeight + event.clientY - active.startY);
+      valueViewerHeightRef.current = next;
+      setValueViewerHeight(next);
+    };
+    const finishValueViewerResize = (event: PointerEvent): void => {
+      const active = activeValueResize.current;
+      if (!active || active.pointerId !== event.pointerId) return;
+      activeValueResize.current = undefined;
+      document.body.classList.remove('resizing-value-viewer');
+      try {
+        if (active.target.hasPointerCapture(event.pointerId)) active.target.releasePointerCapture(event.pointerId);
+      } catch { /* Pointer capture is optional in older webviews. */ }
+      api.updateState({ valueViewerHeight: valueViewerHeightRef.current });
+    };
+    window.addEventListener('pointermove', resizeValueViewer);
+    window.addEventListener('pointerup', finishValueViewerResize);
+    window.addEventListener('pointercancel', finishValueViewerResize);
+    return () => {
+      if (copyNoticeTimer.current !== undefined) window.clearTimeout(copyNoticeTimer.current);
+      window.removeEventListener('pointermove', resizeValueViewer);
+      window.removeEventListener('pointerup', finishValueViewerResize);
+      window.removeEventListener('pointercancel', finishValueViewerResize);
+      document.body.classList.remove('resizing-value-viewer');
+    };
   }, []);
 
   useEffect(() => {
@@ -155,32 +221,83 @@ function Inspector({
       if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      setValueViewerFullscreen(false);
+      if (valueEditing) cancelValueEdit();
+      else setValueViewerFullscreen(false);
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => {
       window.removeEventListener('keydown', closeOnEscape);
       document.body.classList.remove('value-viewer-open');
     };
-  }, [valueViewerFullscreen]);
+  }, [cancelValueEdit, valueEditing, valueViewerFullscreen]);
 
-  const runEdit = async (edit: ViewerEdit): Promise<void> => {
-    if (!onEdit) return;
+  const runEdit = async (edit: ViewerEdit): Promise<boolean> => {
+    if (!onEdit) return false;
     setError(undefined);
-    try { await onEdit(edit); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); }
+    try {
+      await onEdit(edit);
+      return true;
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      return false;
+    }
   };
   const path = typedPath(selected.pointer, entries);
   const jqPath = jqPathFromPath(path);
   const displayedValue = valueViewerText(selected);
   const withLine = physicalLine === undefined ? {} : { physicalLine };
   const isContainer = selected.type === 'object' || selected.type === 'array';
-  const applyValue = (): void => {
+  const canEditValue = editable && !isContainer && selected.raw !== undefined;
+  const applyValue = async (): Promise<void> => {
+    let value: unknown;
     try {
-      void runEdit({ kind: 'set', path, value: parseValue(valueText), ...withLine });
+      value = parseValue(valueText);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+      return;
     }
+    if (await runEdit({ kind: 'set', path, value, ...withLine })) setValueEditing(false);
+  };
+  const openValueEditor = (): void => {
+    setValueText(selected.raw ?? selected.preview);
+    setError(undefined);
+    setValueEditing(true);
+  };
+  const handleValueEditorKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      void applyValue();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      cancelValueEdit();
+    }
+  };
+  const beginValueViewerResize = (event: React.PointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const target = event.currentTarget;
+    activeValueResize.current = { pointerId: event.pointerId, startY: event.clientY, startHeight: valueViewerHeightRef.current, target };
+    document.body.classList.add('resizing-value-viewer');
+    try { target.setPointerCapture(event.pointerId); }
+    catch { /* Pointer capture is optional in older webviews. */ }
+  };
+  const updateValueViewerHeight = (height: number): void => {
+    const next = clampValueViewerHeight(height);
+    valueViewerHeightRef.current = next;
+    setValueViewerHeight(next);
+    api.updateState({ valueViewerHeight: next });
+  };
+  const handleValueViewerResizeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    const step = event.shiftKey ? 32 : 8;
+    let next: number | undefined;
+    if (event.key === 'ArrowUp') next = valueViewerHeightRef.current - step;
+    else if (event.key === 'ArrowDown') next = valueViewerHeightRef.current + step;
+    else if (event.key === 'Home') next = MIN_VALUE_VIEWER_HEIGHT;
+    else if (event.key === 'End') next = MAX_VALUE_VIEWER_HEIGHT;
+    if (next === undefined) return;
+    event.preventDefault();
+    updateValueViewerHeight(next);
   };
   const addValue = (): void => {
     try {
@@ -232,22 +349,51 @@ function Inspector({
 
       <section className="inspector-section value-section">
         <div className="value-viewer-heading">
-          <span className="meta-label">Value viewer</span>
-          <button className="icon-button ghost-button" title="View value full screen" aria-label="View value full screen" onClick={() => setValueViewerFullscreen(true)}><Icon name="maximize" /></button>
+          <div className="value-viewer-label"><span className="meta-label">Value</span>{valueEditing && <span className="value-mode">Editing JSON literal</span>}</div>
+          <div className="value-viewer-actions">
+            {canEditValue && (valueEditing
+              ? <><button className="ghost-button" onClick={cancelValueEdit}>Cancel</button><button className="primary" aria-label="Apply value" onClick={() => void applyValue()}><Icon name="check" />Apply</button></>
+              : <button className="ghost-button" title="Edit as a JSON literal" aria-label="Edit value" onClick={openValueEditor}><Icon name="braces" />Edit</button>)}
+            <button className="icon-button ghost-button" title="View value full screen" aria-label="View value full screen" onClick={() => setValueViewerFullscreen(true)}><Icon name="maximize" /></button>
+          </div>
         </div>
-        <pre className={`value-viewer type-${selected.type}`} title={selected.raw === undefined ? selected.preview : undefined}>{displayedValue}</pre>
+        <div className={`value-surface ${valueEditing ? 'editing' : ''}`} style={{ height: valueViewerHeight }}>
+          {valueEditing
+            ? <textarea className="value-editor" aria-label="JSON value" autoFocus spellCheck={false} value={valueText} onChange={(event) => setValueText(event.target.value)} onKeyDown={handleValueEditorKeyDown} />
+            : <pre className={`value-viewer type-${selected.type}`} title={selected.raw === undefined ? selected.preview : undefined}>{displayedValue}</pre>}
+        </div>
+        <div
+          className="value-resize-handle"
+          role="separator"
+          aria-label="Resize value panel"
+          aria-orientation="horizontal"
+          aria-valuemin={MIN_VALUE_VIEWER_HEIGHT}
+          aria-valuemax={MAX_VALUE_VIEWER_HEIGHT}
+          aria-valuenow={valueViewerHeight}
+          tabIndex={0}
+          title="Drag to resize · Double-click to reset"
+          onPointerDown={beginValueViewerResize}
+          onKeyDown={handleValueViewerResizeKeyDown}
+          onDoubleClick={() => updateValueViewerHeight(DEFAULT_VALUE_VIEWER_HEIGHT)}
+        ><span /></div>
+        {valueEditing && <span className="value-editor-hint"><kbd>⌘/Ctrl</kbd> + <kbd>Enter</kbd> to apply · <kbd>Esc</kbd> to cancel</span>}
         {selected.raw === undefined && <span className="value-viewer-note"><Icon name="info" />This value is too large to transfer inline. The structured tree remains fully available.</span>}
       </section>
 
       {valueViewerFullscreen && createPortal(<section className="value-viewer-fullscreen" role="dialog" aria-modal="true" aria-label={`Value viewer for ${selected.pointer || '/'}`}>
         <header className="value-viewer-fullscreen-header">
-          <div className="value-viewer-title"><span className={`inspector-type-mark type-${selected.type}`}>{typeGlyph(selected)}</span><div><span className="eyebrow">Value viewer</span><strong title={jqPath}>{jqPath}</strong></div></div>
+          <div className="value-viewer-title"><span className={`inspector-type-mark type-${selected.type}`}>{typeGlyph(selected)}</span><div><span className="eyebrow">Value</span><strong title={jqPath}>{jqPath}</strong></div></div>
           <div className="value-viewer-fullscreen-actions">
             <button disabled={selected.raw === undefined || copying !== undefined} onClick={() => void copy('value', selected.raw ?? selected.preview)}><Icon name="copy" />Copy value</button>
-            <button className="primary" autoFocus onClick={() => setValueViewerFullscreen(false)}><Icon name="restore" />Exit full screen</button>
+            {canEditValue && (valueEditing
+              ? <><button onClick={cancelValueEdit}>Cancel</button><button className="primary" onClick={() => void applyValue()}><Icon name="check" />Apply value</button></>
+              : <button onClick={openValueEditor}><Icon name="braces" />Edit value</button>)}
+            <button className={valueEditing ? '' : 'primary'} autoFocus={!valueEditing} onClick={() => setValueViewerFullscreen(false)}><Icon name="restore" />Exit full screen</button>
           </div>
         </header>
-        <pre className={`value-viewer-fullscreen-content type-${selected.type}`}>{displayedValue}</pre>
+        {valueEditing
+          ? <textarea className="value-viewer-fullscreen-content value-editor" aria-label="JSON value" autoFocus spellCheck={false} value={valueText} onChange={(event) => setValueText(event.target.value)} onKeyDown={handleValueEditorKeyDown} />
+          : <pre className={`value-viewer-fullscreen-content type-${selected.type}`}>{displayedValue}</pre>}
       </section>, document.body)}
 
       <div className="inspector-actions">
@@ -256,14 +402,6 @@ function Inspector({
         <button onClick={() => api.command({ type: 'revealSource', path, ...(physicalLine ? { physicalLine } : {}) })}><Icon name="external" />Source</button>
       </div>
       {copyNotice && <div className={`copy-notice ${copyNotice.kind}`} role={copyNotice.kind === 'error' ? 'alert' : 'status'}><Icon name={copyNotice.kind === 'error' ? 'error' : 'check'} />{copyNotice.message}</div>}
-
-      {editable && !isContainer && selected.raw !== undefined && <section className="edit-section">
-        <div className="edit-section-title"><span className="edit-icon"><Icon name="braces" /></span><div><strong>Edit value</strong><span>Enter any valid JSON value</span></div></div>
-        <label className="control-label" htmlFor="edit-value">JSON value</label>
-        <textarea id="edit-value" rows={4} value={valueText} onChange={(event) => setValueText(event.target.value)} />
-        <button className="primary" onClick={applyValue}><Icon name="check" />Apply value</button>
-      </section>}
-      {editable && !isContainer && selected.raw === undefined && <div className="inline-note"><Icon name="info" />This value is larger than the safe inline edit limit. Open the source text to edit it.</div>}
 
       {editable && parent?.type === 'object' && <section className="edit-section compact-edit-section">
         <div className="edit-section-title"><span className="edit-icon"><Icon name="braces" /></span><div><strong>Rename property</strong><span>Update this object key</span></div></div>
