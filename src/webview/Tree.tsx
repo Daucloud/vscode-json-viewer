@@ -911,16 +911,17 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
   }, [expanded, props, rows, selectNode, toggle]);
 
   const rowTree = props.physicalLine !== undefined;
-  const defaultTreePanePercent = rowTree ? 56 : 68;
+  const defaultTreePanePercent = rowTree ? 50 : 68;
+  const initialTreePanePercent = rowTree ? api.state().jsonlTreePanePercent : api.state().treePanePercent;
 
   return <ResizableSplit
     className={rowTree ? 'tree-explorer row-tree-explorer' : 'tree-explorer'}
     defaultPercent={defaultTreePanePercent}
-    initialPercent={api.state().treePanePercent}
+    initialPercent={initialTreePanePercent}
     minStart={rowTree ? 120 : 220}
     minEnd={rowTree ? 140 : 220}
     label="Resize JSON tree and inspector"
-    onChange={(next) => api.updateState({ treePanePercent: next })}
+    onChange={(next) => api.updateState(rowTree ? { jsonlTreePanePercent: next } : { treePanePercent: next })}
   >
     <section className="tree-column">
       <div className="tree-toolbar" aria-busy={expandingAll}>

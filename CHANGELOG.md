@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format is based on 
 - Unified scalar value viewing and editing in one panel, with strict JSON-literal editing and shared inline/full-screen state.
 - Decoded JSON string escapes for natural display and formatted objects/arrays without rounding unsafe integer literals.
 - Added a draggable, keyboard-accessible, persisted Value panel height with double-click reset.
+- Changed the default JSONL layout to equal-width records, tree, and Inspector panes, with independent persistence for the nested JSONL split.
 
 ## 0.2.2 — 2026-07-28
 

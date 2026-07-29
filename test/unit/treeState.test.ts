@@ -177,4 +177,21 @@ describe('TreeExplorer state', () => {
     expect(screen.getAllByText('Value')).toHaveLength(1);
     expect(document.querySelector('.edit-section')).toBeNull();
   });
+
+  it('gives JSONL record trees and Inspectors equal default widths with independent persistence', () => {
+    const root: TreeNodeSummary = {
+      pointer: '', key: 'Record', type: 'object', preview: '{0 properties}', raw: '{}', childCount: 0, hasChildren: false,
+    };
+    render(React.createElement(TreeExplorer, {
+      root,
+      physicalLine: 7,
+      loadChildren: vi.fn(async () => ({ parentPointer: '', parent: root, offset: 0, total: 0, children: [] })),
+      editable: false,
+    }));
+
+    const resizeHandle = screen.getByRole('separator', { name: 'Resize JSON tree and inspector' });
+    expect(resizeHandle.getAttribute('aria-valuenow')).toBe('50');
+    fireEvent.keyDown(resizeHandle, { key: 'ArrowRight' });
+    expect(mockedApi.updateState).toHaveBeenCalledWith({ jsonlTreePanePercent: 52 });
+  });
 });

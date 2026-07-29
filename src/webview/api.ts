@@ -26,6 +26,7 @@ export interface PersistedState {
   tableScrollTop?: number;
   jsonlTablePanePercent?: number;
   treePanePercent?: number;
+  jsonlTreePanePercent?: number;
   jsonlDetailMaximized?: boolean;
   valueViewerHeight?: number;
 }

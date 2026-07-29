@@ -49,7 +49,7 @@ Fast JSON & JSONL Viewer 是一个为真实数据文件设计的 VS Code 查看�
 
 ![JSONL virtual table and row Inspector](media/readme-jsonl-table.jpg)
 
-表格同时支持纵向和横向虚拟化。点击记录后，右侧可以像 JSON Viewer 一样展开该行的完整结构；Selected record 默认占 38% 宽度，可在不丢失树状态的情况下全屏覆盖整个 Viewer，并且两层分隔条都能在更大范围内自由拖动。
+表格同时支持纵向和横向虚拟化。点击记录后，右侧可以像 JSON Viewer 一样展开该行的完整结构；记录表格、选中记录树和 Inspector 默认三等分，Selected record 仍可在不丢失树状态的情况下全屏覆盖整个 Viewer，并且两层分隔条都能在更大范围内自由拖动。
 
 ## 核心能力
 

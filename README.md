@@ -49,7 +49,7 @@ Only visible tree nodes stay mounted. The Inspector shows the selected value's J
 
 ![JSONL virtual table and row Inspector](media/readme-jsonl-table.jpg)
 
-The table is virtualized both vertically and horizontally. Select a record to explore its complete structure in a JSON-style tree. The Selected record pane starts with a generous 38% share, can cover the complete Viewer in full-screen mode without losing tree state, and both nested splits remain freely resizable.
+The table is virtualized both vertically and horizontally. Select a record to explore its complete structure in a JSON-style tree. The records table, selected-record tree, and Inspector start as equal-width panes; Selected record can still cover the complete Viewer in full-screen mode, and both nested splits remain freely resizable.
 
 ## Features
 

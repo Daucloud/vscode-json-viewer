@@ -21,6 +21,7 @@ import { TreeExplorer } from './Tree.js';
 const HEADER_HEIGHT = 34;
 const ROW_HEIGHT = 30;
 const LINE_COLUMN_WIDTH = 86;
+const DEFAULT_TABLE_PANE_PERCENT = 100 / 3;
 
 function cellText(value: unknown): string {
   if (value === undefined) return '';
@@ -533,7 +534,7 @@ export function JsonlView({
     {error && <div className="banner error" role="alert"><span className="banner-icon"><Icon name="error" /></span><span>{error}</span><button className="icon-button ghost-button" aria-label="Dismiss" title="Dismiss" onClick={() => setError(undefined)}><Icon name="close" /></button></div>}
     <ResizableSplit
       className="jsonl-layout"
-      defaultPercent={62}
+      defaultPercent={DEFAULT_TABLE_PANE_PERCENT}
       initialPercent={persisted.jsonlTablePanePercent}
       minStart={240}
       minEnd={240}
