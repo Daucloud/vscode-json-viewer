@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## Unreleased
 
+No unreleased changes.
+
+## 0.2.3 — 2026-07-29
+
 ### Inspector and value experience
 
 - Replaced Inspector JSON Pointer output with jq-ready paths while retaining JSON Pointer internally for lazy loading and source navigation.
