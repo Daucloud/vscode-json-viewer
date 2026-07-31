@@ -335,7 +335,7 @@ function Inspector({
       <section className="inspector-section pointer-section">
         <span className="meta-label">jq path</span>
         <div className="pointer-field">
-          <code title={jqPath}>{jqPath}</code>
+          <code title={jqPath} tabIndex={0} aria-label="jq path">{jqPath}</code>
           <button className="copy-path-button" disabled={copying !== undefined} title="Copy jq path" aria-label="Copy jq path" onClick={() => void copy('path', jqPath)}>
             {copying === 'path' ? <span className="button-spinner" /> : <Icon name="copy" />}<span>{copying === 'path' ? 'Copying' : 'Copy'}</span>
           </button>

@@ -4,7 +4,11 @@ All notable changes to this project are documented here. The format is based on 
 
 ## Unreleased
 
-No unreleased changes.
+### Fixes
+
+- Made long jq paths horizontally scrollable without moving or shrinking the Copy action, including keyboard focus support.
+- Made large JSON search result sets scroll inside a dedicated bounded region across desktop and narrow layouts.
+- Replaced the retired Shields.io Visual Studio Marketplace badges in both READMEs with live version and install badges.
 
 ## 0.2.3 — 2026-07-29
 

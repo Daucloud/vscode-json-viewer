@@ -190,6 +190,9 @@ describe('TreeExplorer state', () => {
     }));
 
     const resizeHandle = screen.getByRole('separator', { name: 'Resize JSON tree and inspector' });
+    const jqPath = screen.getByLabelText('jq path');
+    expect(jqPath.tagName).toBe('CODE');
+    expect(jqPath.getAttribute('tabindex')).toBe('0');
     expect(resizeHandle.getAttribute('aria-valuenow')).toBe('50');
     fireEvent.keyDown(resizeHandle, { key: 'ArrowRight' });
     expect(mockedApi.updateState).toHaveBeenCalledWith({ jsonlTreePanePercent: 52 });
