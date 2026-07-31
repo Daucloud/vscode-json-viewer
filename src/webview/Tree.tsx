@@ -432,6 +432,8 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
   const [depth, setDepth] = useState(2);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pendingScrollTop = useRef(props.physicalLine === undefined ? api.state().jsonScrollTop : undefined);
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  const pendingFocusPointer = useRef<string | undefined>(undefined);
   const [expandingAll, setExpandingAll] = useState(false);
   const [expansionStatus, setExpansionStatus] = useState<string>();
   const expansionCancelRequested = useRef(false);
@@ -741,10 +743,11 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
   }, [expandingAll]);
 
   useEffect(() => {
-    if (!props.focusPointer) return;
+    const focusPointer = props.focusPointer;
+    if (focusPointer === undefined) return;
     let cancelled = false;
     void (async () => {
-      const target = props.focusPointer!;
+      const target = focusPointer;
       const segments = pathFromPointer(target);
       let parent = '';
       const nextExpanded = new Set(expanded);
@@ -766,6 +769,7 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
         parent = childPointer;
       }
       if (!cancelled && entriesRef.current.has(target)) {
+        pendingFocusPointer.current = target;
         setExpanded(nextExpanded);
         setSelectedPointer(target);
         props.onSelectedChange?.(target);
@@ -828,8 +832,6 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
     getItemKey: (index) => rows[index]?.kind === 'node' ? `n:${rows[index].node.pointer}` : `${rows[index]?.kind}:${index}`,
   });
   const selected = entries.get(selectedPointer)?.node ?? entries.get(props.root.pointer)?.node ?? props.root;
-  const rowRefs = useRef(new Map<string, HTMLDivElement>());
-  const pendingFocusPointer = useRef<string | undefined>(undefined);
 
   const selectNode = useCallback((pointer: string, rowIndex?: number, focus = false): void => {
     setSelectedPointer(pointer);
@@ -842,9 +844,13 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
   useEffect(() => {
     const pointer = pendingFocusPointer.current;
     if (pointer === undefined) return;
+    const rowIndex = rows.findIndex((row) => row.kind === 'node' && row.node.pointer === pointer);
+    if (rowIndex < 0) return;
+    virtualizer.scrollToIndex(rowIndex, { align: 'center' });
     const frame = window.requestAnimationFrame(() => {
-      rowRefs.current.get(pointer)?.focus();
-      if (rowRefs.current.has(pointer)) pendingFocusPointer.current = undefined;
+      const row = rowRefs.current.get(pointer);
+      row?.focus({ preventScroll: true });
+      if (row) pendingFocusPointer.current = undefined;
     });
     return () => window.cancelAnimationFrame(frame);
   }, [rows, selectedPointer]);
