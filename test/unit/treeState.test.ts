@@ -5,6 +5,8 @@ import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TreeChildrenResult, TreeNodeSummary } from '../../src/shared/types.js';
 
+const virtualScrollToIndex = vi.hoisted(() => vi.fn());
+
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: ({ count, estimateSize, getItemKey }: {
     count: number;
@@ -18,7 +20,7 @@ vi.mock('@tanstack/react-virtual', () => ({
       start: index * estimateSize(),
       size: estimateSize(),
     })),
-    scrollToIndex: vi.fn(),
+    scrollToIndex: virtualScrollToIndex,
   }),
 }));
 
@@ -58,6 +60,34 @@ describe('Value presentation', () => {
 });
 
 describe('TreeExplorer state', () => {
+  it('scrolls to and focuses a search result after lazily expanding its ancestors', async () => {
+    const root: TreeNodeSummary = {
+      pointer: '', key: 'JSON', type: 'object', preview: '{1}', childCount: 1, hasChildren: true,
+    };
+    const nested: TreeNodeSummary = {
+      pointer: '/nested', key: 'nested', type: 'object', preview: '{1}', childCount: 1, hasChildren: true,
+    };
+    const value: TreeNodeSummary = {
+      pointer: '/nested/value', key: 'value', type: 'string', preview: 'target', raw: '"target"', childCount: 0, hasChildren: false,
+    };
+    const loadContainingChild = vi.fn(async (parent: string): Promise<TreeChildrenResult> => parent === ''
+      ? { parentPointer: '', parent: root, offset: 0, total: 1, children: [nested] }
+      : { parentPointer: '/nested', parent: nested, offset: 0, total: 1, children: [value] });
+
+    render(React.createElement(TreeExplorer, {
+      root,
+      loadChildren: vi.fn(),
+      loadContainingChild,
+      editable: false,
+      focusPointer: '/nested/value',
+    }));
+
+    await waitFor(() => expect(virtualScrollToIndex).toHaveBeenCalledWith(2, { align: 'center' }));
+    await waitFor(() => expect((document.activeElement as HTMLElement).dataset.pointer).toBe('/nested/value'));
+    expect(document.querySelector('[data-pointer="/nested/value"]')?.getAttribute('aria-selected')).toBe('true');
+    expect(loadContainingChild).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps loaded and expanded row data when persisted props change during a resize render', async () => {
     const root: TreeNodeSummary = {
       pointer: '', key: 'JSON', type: 'object', preview: '{1}', childCount: 1, hasChildren: true,
@@ -190,6 +220,9 @@ describe('TreeExplorer state', () => {
     }));
 
     const resizeHandle = screen.getByRole('separator', { name: 'Resize JSON tree and inspector' });
+    const jqPath = screen.getByLabelText('jq path');
+    expect(jqPath.tagName).toBe('CODE');
+    expect(jqPath.getAttribute('tabindex')).toBe('0');
     expect(resizeHandle.getAttribute('aria-valuenow')).toBe('50');
     fireEvent.keyDown(resizeHandle, { key: 'ArrowRight' });
     expect(mockedApi.updateState).toHaveBeenCalledWith({ jsonlTreePanePercent: 52 });

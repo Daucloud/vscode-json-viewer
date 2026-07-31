@@ -13,8 +13,8 @@
 </p>
 
 <p align="center">
-  <a href="https://marketplace.visualstudio.com/items?itemName=daucloud.vscode-json-viewer"><img alt="VS Code Marketplace version" src="https://img.shields.io/visual-studio-marketplace/v/daucloud.vscode-json-viewer?style=flat-square&label=Marketplace"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=daucloud.vscode-json-viewer"><img alt="VS Code Marketplace installs" src="https://img.shields.io/visual-studio-marketplace/i/daucloud.vscode-json-viewer?style=flat-square"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=daucloud.vscode-json-viewer"><img alt="VS Code Marketplace version" src="https://vsmarketplacebadges.dev/version-short/daucloud.vscode-json-viewer.svg"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=daucloud.vscode-json-viewer"><img alt="VS Code Marketplace installs" src="https://vsmarketplacebadges.dev/installs-short/daucloud.vscode-json-viewer.svg"></a>
   <a href="https://github.com/daucloud/vscode-json-viewer/actions/workflows/ci.yml"><img alt="Continuous integration" src="https://github.com/daucloud/vscode-json-viewer/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/daucloud/vscode-json-viewer?style=flat-square"></a>
 </p>

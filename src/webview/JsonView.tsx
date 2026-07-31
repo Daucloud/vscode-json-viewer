@@ -87,7 +87,7 @@ export function JsonView({ result, editable }: { result: JsonOpenResult; editabl
     {error && <div className="banner error" role="alert"><span className="banner-icon"><Icon name="error" /></span><span>{error}</span><button className="icon-button ghost-button" aria-label="Dismiss" onClick={() => setError(undefined)}><Icon name="close" /></button></div>}
     {matches && <section className="search-results" aria-label="Search results">
       <div className="search-results-summary"><span className="result-icon"><Icon name="search" /></span><div><strong>{matches.matches.length.toLocaleString()} matches{matches.truncated ? '+' : ''}</strong><span>Jump to a matching path</span></div></div>
-      <div className="search-result-list">
+      <div className="search-result-list" role="region" aria-label="Matching JSON paths" tabIndex={0}>
         {matches.matches.slice(0, 100).map((match) => <button key={match.pointer} title={match.pointer || '/'} onClick={() => setFocusPointer(match.pointer)}>
           <span className="result-path">{match.pointer || '/'}</span><span className={`type-${match.type}`}>{match.preview}</span>
         </button>)}
