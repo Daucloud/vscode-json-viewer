@@ -25,6 +25,7 @@ export type IconName =
   | 'search'
   | 'sort'
   | 'sparkle'
+  | 'subtree'
   | 'table'
   | 'trash'
   | 'undo'
@@ -56,6 +57,7 @@ const drawings: Record<IconName, React.ReactNode> = {
   search: <><circle cx="7" cy="7" r="4.2"/><path d="m10.2 10.2 3.3 3.3"/></>,
   sort: <><path d="M5 3v10"/><path d="m2.8 5.2 2.2-2.2 2.2 2.2"/><path d="M11 13V3"/><path d="m8.8 10.8 2.2 2.2 2.2-2.2"/></>,
   sparkle: <><path d="M8 1.8c.5 3.1 2.1 4.7 5.2 5.2-3.1.5-4.7 2.1-5.2 5.2C7.5 9.1 5.9 7.5 2.8 7 5.9 6.5 7.5 4.9 8 1.8Z"/><path d="M12.7 11.5c.2 1 .8 1.6 1.8 1.8-1 .2-1.6.8-1.8 1.8-.2-1-.8-1.6-1.8-1.8 1-.2 1.6-.8 1.8-1.8Z"/></>,
+  subtree: <><path d="M3 2.5v7.8c0 1 .8 1.7 1.7 1.7H7"/><path d="M3 6.5h4"/><path d="m6.5 4.5 2 2-2 2"/><path d="m6.5 10 2 2-2 2"/><path d="M10.5 6.5h2.8"/><path d="M10.5 12h2.8"/></>,
   table: <><rect x="2.3" y="3" width="11.4" height="10" rx="1"/><path d="M2.3 6.3h11.4"/><path d="M6.1 3v10"/></>,
   trash: <><path d="M3.5 4.5h9"/><path d="M6 4.5V2.8h4v1.7"/><path d="m4.7 4.5.7 9h5.2l.7-9"/><path d="M7 7v4"/><path d="M9 7v4"/></>,
   undo: <><path d="M5.5 4H2.7v-2.8"/><path d="M2.9 3.8A6 6 0 0 1 13 8.2a5.4 5.4 0 0 1-5.5 5.1"/></>,

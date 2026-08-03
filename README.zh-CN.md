@@ -56,7 +56,7 @@ Fast JSON & JSONL Viewer 是一个为真实数据文件设计的 VS Code 查看�
 ### JSON / `.json`
 
 - 懒加载、虚拟化的彩色 JSON 树；对象和数组按页请求子项，单页最多 200 项。
-- 搜索键名和值，按深度展开、全部收起，以及带安全上限的 **Expand all**。
+- 搜索键名和值，支持按深度展开、仅递归展开当前选中的子树、全部收起，以及带安全上限的 **Expand all**。
 - Inspector 显示 JSON Pointer、类型、子节点数量和格式化 Value Viewer；支持全屏查看、复制路径、复制值和定位源码。
 - 默认不抢占普通 JSON 的打开方式：右键 **Open With → Fast JSON Viewer**，或运行 **Fast JSON Viewer: Open in Fast JSON Viewer**。
 - 小文件可编辑：修改值、重命名键、添加/删除节点、撤销/重做、Save、Save As 和 Hot Exit 备份。

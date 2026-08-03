@@ -56,7 +56,7 @@ The table is virtualized both vertically and horizontally. Select a record to ex
 ### JSON / `.json`
 
 - Lazy-loaded, virtualized, syntax-colored JSON tree. Object and array children are requested in pages of up to 200 items.
-- Search keys and values, expand to a chosen depth, collapse everything, or use **Expand all** with a safety limit.
+- Search keys and values, expand to a chosen depth, recursively expand only the selected subtree, collapse everything, or use **Expand all** with a safety limit.
 - Inspector with JSON Pointer, type, child count, and a formatted Value Viewer, plus full-screen inspection, copy path, copy value, and source navigation actions.
 - Keeps the standard text editor as the default for JSON. Right-click and choose **Open With → Fast JSON Viewer**, or run **Fast JSON Viewer: Open in Fast JSON Viewer**.
 - Edit small files: change values, rename keys, add or remove nodes, undo/redo, Save, Save As, and restore Hot Exit backups.

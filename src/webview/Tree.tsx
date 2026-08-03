@@ -434,7 +434,7 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
   const pendingScrollTop = useRef(props.physicalLine === undefined ? api.state().jsonScrollTop : undefined);
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
   const pendingFocusPointer = useRef<string | undefined>(undefined);
-  const [expandingAll, setExpandingAll] = useState(false);
+  const [expandingTree, setExpandingTree] = useState(false);
   const [expansionStatus, setExpansionStatus] = useState<string>();
   const expansionCancelRequested = useRef(false);
   const expansionGeneration = useRef(0);
@@ -447,6 +447,8 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
   useEffect(() => {
     expansionGeneration.current++;
     expansionCancelRequested.current = true;
+    setExpandingTree(false);
+    setExpansionStatus(undefined);
     const next = new Map<string, Entry>([[props.root.pointer, { node: props.root }]]);
     commitEntries(next);
     setExpandedState(new Set(props.initialExpanded ?? []));
@@ -633,21 +635,27 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
     setExpanded(nextExpanded);
   }, [depth, loadPage, props.root, setExpanded]);
 
-  const expandAll = useCallback(async (): Promise<void> => {
-    if (expandingAll) return;
+  const expandRecursively = useCallback(async (startNode: TreeNodeSummary, scope: 'document' | 'subtree'): Promise<void> => {
+    if (expandingTree) return;
     const limit = EXPAND_ALL_NODE_LIMIT;
-    if (props.root.childCount > limit) {
-      setExpansionStatus(`This document has more than ${limit.toLocaleString()} root children. Use Depth for a bounded expansion.`);
+    const isDocument = scope === 'document';
+    const scopeLabel = isDocument ? 'all' : 'selected subtree';
+    if (startNode.childCount > limit) {
+      setExpansionStatus(isDocument
+        ? `This document has more than ${limit.toLocaleString()} root children. Use Depth for a bounded expansion.`
+        : `This node has more than ${limit.toLocaleString()} direct children. Expand it one level at a time.`);
       return;
     }
 
-    setExpandingAll(true);
+    setExpandingTree(true);
     expansionCancelRequested.current = false;
     const generation = expansionGeneration.current;
-    setExpansionStatus('Expanding all…');
-    const nextExpanded = new Set<string>();
-    const queue: TreeNodeSummary[] = [props.root];
-    const seen = new Set<string>([props.root.pointer]);
+    setExpansionStatus(`Expanding ${scopeLabel}…`);
+    // Whole-document expansion intentionally replaces the current expansion
+    // set. A selected subtree is contextual, so preserve every other branch.
+    const nextExpanded = isDocument ? new Set<string>() : new Set(expanded);
+    const queue: TreeNodeSummary[] = [startNode];
+    const seen = new Set<string>([startNode.pointer]);
     let queueIndex = 0;
     let stoppedAtLimit = false;
     let cancelledByUser = false;
@@ -714,7 +722,7 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
         processedContainers++;
         if (processedContainers % EXPAND_PROGRESS_INTERVAL === 0) {
           setExpanded(new Set(nextExpanded));
-          setExpansionStatus(`Expanding all… ${seen.size.toLocaleString()} nodes`);
+          setExpansionStatus(`Expanding ${scopeLabel}… ${seen.size.toLocaleString()} nodes`);
           await yieldToBrowser();
         }
         if (stoppedAtLimit) break;
@@ -723,24 +731,24 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
       if (generation !== expansionGeneration.current) return;
       setExpanded(nextExpanded);
       setExpansionStatus(cancelledByUser
-        ? `Expansion stopped after ${nextExpanded.size.toLocaleString()} containers.`
+        ? `Expansion stopped after ${processedContainers.toLocaleString()} containers.`
         : stoppedAtLimit
-          ? `Expanded ${nextExpanded.size.toLocaleString()} containers; stopped at ${limit.toLocaleString()} nodes to keep the viewer responsive.`
-          : `Expanded ${nextExpanded.size.toLocaleString()} containers.`);
+          ? `Expanded ${processedContainers.toLocaleString()} containers; stopped at ${limit.toLocaleString()} nodes to keep the viewer responsive.`
+          : `Expanded ${processedContainers.toLocaleString()} containers in ${isDocument ? 'the document' : 'the selected subtree'}.`);
     } catch (error) {
       if (generation !== expansionGeneration.current) return;
       setExpanded(nextExpanded);
-      setExpansionStatus(`Expand all stopped: ${error instanceof Error ? error.message : String(error)}`);
+      setExpansionStatus(`Recursive expansion stopped: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      if (generation === expansionGeneration.current) setExpandingAll(false);
+      if (generation === expansionGeneration.current) setExpandingTree(false);
     }
-  }, [expandingAll, loadPage, props.root, setExpanded]);
+  }, [expanded, expandingTree, loadPage, setExpanded]);
 
-  const cancelExpandAll = useCallback((): void => {
-    if (!expandingAll) return;
+  const cancelRecursiveExpansion = useCallback((): void => {
+    if (!expandingTree) return;
     expansionCancelRequested.current = true;
     setExpansionStatus('Stopping expansion…');
-  }, [expandingAll]);
+  }, [expandingTree]);
 
   useEffect(() => {
     const focusPointer = props.focusPointer;
@@ -832,6 +840,7 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
     getItemKey: (index) => rows[index]?.kind === 'node' ? `n:${rows[index].node.pointer}` : `${rows[index]?.kind}:${index}`,
   });
   const selected = entries.get(selectedPointer)?.node ?? entries.get(props.root.pointer)?.node ?? props.root;
+  const canExpandSelectedSubtree = selected.pointer !== props.root.pointer && selected.hasChildren;
 
   const selectNode = useCallback((pointer: string, rowIndex?: number, focus = false): void => {
     setSelectedPointer(pointer);
@@ -930,21 +939,29 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
     onChange={(next) => api.updateState(rowTree ? { jsonlTreePanePercent: next } : { treePanePercent: next })}
   >
     <section className="tree-column">
-      <div className="tree-toolbar" aria-busy={expandingAll}>
+      <div className="tree-toolbar" aria-busy={expandingTree}>
         <div className="tree-toolbar-group">
-          <button className="ghost-button" disabled={expandingAll} title="Collapse every expanded node" aria-label="Collapse all" onClick={() => setExpanded(new Set())}><Icon name="collapse" /><span className="button-label">Collapse</span></button>
+          <button className="ghost-button" disabled={expandingTree} title="Collapse every expanded node" aria-label="Collapse all" onClick={() => setExpanded(new Set())}><Icon name="collapse" /><span className="button-label">Collapse</span></button>
           <span className="toolbar-divider" />
-          <label className="depth-control"><span className="depth-label">Depth</span><input className="depth-input" disabled={expandingAll} aria-label="Expansion depth" type="number" min={1} max={20} value={depth} onChange={(event) => setDepth(Math.max(1, Number(event.target.value)))} /></label>
-          <button className="ghost-button" disabled={expandingAll} title={`Expand tree to depth ${depth}`} aria-label={`Expand tree to depth ${depth}`} onClick={() => void expandDepth()}><Icon name="expand" /><span className="button-label">Expand</span></button>
-          {expandingAll
-            ? <button className="ghost-button" title="Stop expanding the tree" aria-label="Stop expanding" onClick={cancelExpandAll}><Icon name="close" /><span className="button-label">Stop</span></button>
-            : <button className="ghost-button" title="Expand every node within a safe size limit" aria-label="Expand all" onClick={() => void expandAll()}><Icon name="expandAll" /><span className="button-label">Expand all</span></button>}
+          <label className="depth-control"><span className="depth-label">Depth</span><input className="depth-input" disabled={expandingTree} aria-label="Expansion depth" type="number" min={1} max={20} value={depth} onChange={(event) => setDepth(Math.max(1, Number(event.target.value)))} /></label>
+          <button className="ghost-button" disabled={expandingTree} title={`Expand tree to depth ${depth}`} aria-label={`Expand tree to depth ${depth}`} onClick={() => void expandDepth()}><Icon name="expand" /><span className="button-label">Expand</span></button>
+          <span className="toolbar-divider" />
+          <button
+            className="ghost-button"
+            disabled={expandingTree || !canExpandSelectedSubtree}
+            title={canExpandSelectedSubtree ? `Expand “${selected.key}” and every descendant` : 'Select a child container to expand its subtree'}
+            aria-label="Expand selected subtree"
+            onClick={() => void expandRecursively(selected, 'subtree')}
+          ><Icon name="subtree" /><span className="button-label">Subtree</span></button>
+          {expandingTree
+            ? <button className="ghost-button" title="Stop expanding the tree" aria-label="Stop expanding" onClick={cancelRecursiveExpansion}><Icon name="close" /><span className="button-label">Stop</span></button>
+            : <button className="ghost-button" title="Expand every node within a safe size limit" aria-label="Expand all" onClick={() => void expandRecursively(props.root, 'document')}><Icon name="expandAll" /><span className="button-label">Expand all</span></button>}
         </div>
         <span className="spacer" />
-        {expansionStatus && <span className="expand-status" role="status" title={expansionStatus}>{expandingAll && <span className="button-spinner" />}{expansionStatus}</span>}
+        {expansionStatus && <span className="expand-status" role="status" title={expansionStatus}>{expandingTree && <span className="button-spinner" />}{expansionStatus}</span>}
         <span className="visible-count"><span className="status-orb" />{rows.length.toLocaleString()} visible</span>
       </div>
-      <div className="tree-scroll" ref={scrollRef} role="tree" aria-label="JSON tree" aria-busy={expandingAll} onScroll={(event) => {
+      <div className="tree-scroll" ref={scrollRef} role="tree" aria-label="JSON tree" aria-busy={expandingTree} onScroll={(event) => {
         if (props.physicalLine === undefined) api.updateState({ jsonScrollTop: event.currentTarget.scrollTop });
       }}>
         <div className="virtual-space" style={{ height: virtualizer.getTotalSize() }}>
