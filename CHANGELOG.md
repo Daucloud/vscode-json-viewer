@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is based on 
 
 No unreleased changes.
 
+## 0.2.5 — 2026-08-03
+
+### Tree navigation
+
+- Added a bounded **Expand subtree** action that recursively opens every descendant of the selected child container while preserving expansion state in other branches.
+
 ## 0.2.4 — 2026-07-31
 
 ### Fixes
