@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { TreeChildrenResult, TreeNodeSummary } from '../../src/shared/types.js';
+import type { JsonlValueChunkResult, TreeChildrenResult, TreeNodeSummary } from '../../src/shared/types.js';
 
 const virtualScrollToIndex = vi.hoisted(() => vi.fn());
 
@@ -190,9 +190,113 @@ describe('TreeExplorer state', () => {
 
     await waitFor(() => expect(view.container.querySelector('.node-preview')?.textContent).toBe('2'));
     expect(screen.queryByLabelText('JSON value')).toBeNull();
-    expect(onEdit).toHaveBeenCalledWith({ kind: 'set', path: [], value: 2 });
+    expect(onEdit).toHaveBeenCalledWith({ kind: 'setRaw', path: [], raw: '2' });
     expect(loadChildren).toHaveBeenCalledWith('', 0, 200);
     expect(root.raw).toBe('1');
+  });
+
+  it('loads a complete non-inline JSONL container and edits it as an exact JSON literal', async () => {
+    const source = JSON.stringify({ payload: 'x'.repeat(20_000), id: 9007199254740991 });
+    const root: TreeNodeSummary = {
+      pointer: '', key: 'Record', type: 'object', preview: '{2 properties}', childCount: 2, hasChildren: true,
+    };
+    const updatedRoot: TreeNodeSummary = {
+      ...root, preview: '{1 property}', raw: '{"changed":true}', childCount: 1,
+    };
+    const loadValue = vi.fn(async (pointer: string, offset: number): Promise<JsonlValueChunkResult> => {
+      const nextOffset = Math.min(source.length, offset + 8_000);
+      return {
+        physicalLine: 7,
+        pointer,
+        offset,
+        nextOffset,
+        totalChars: source.length,
+        chunk: source.slice(offset, nextOffset),
+        done: nextOffset === source.length,
+        completeAvailable: true,
+      };
+    });
+    const loadChildren = vi.fn(async (): Promise<TreeChildrenResult> => ({
+      parentPointer: '', parent: updatedRoot, offset: 0, total: 0, children: [],
+    }));
+    const onEdit = vi.fn(async () => undefined);
+    render(React.createElement(TreeExplorer, {
+      root, physicalLine: 7, loadChildren, loadValue, editable: true, onEdit,
+    }));
+
+    await waitFor(() => expect(loadValue).toHaveBeenCalledTimes(3));
+    expect(screen.getByText(/"payload": "x+/).textContent).toContain('"id": 9007199254740991');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit value' }));
+    const valueEditor = document.querySelector<HTMLTextAreaElement>('textarea.value-editor')!;
+    expect(valueEditor.value).toBe(source);
+    fireEvent.change(valueEditor, { target: { value: '{"id":900719925474099312345}' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply value' }));
+
+    await waitFor(() => expect(onEdit).toHaveBeenCalledWith({
+      kind: 'setRaw', path: [], raw: '{"id":900719925474099312345}', physicalLine: 7,
+    }));
+  });
+
+  it('ignores a stale value response after selecting another JSONL node', async () => {
+    const root: TreeNodeSummary = {
+      pointer: '', key: 'Record', type: 'object', preview: '{2 properties}', raw: '{}', childCount: 2, hasChildren: true,
+    };
+    const first: TreeNodeSummary = {
+      pointer: '/first', key: 'first', type: 'string', preview: 'first preview', childCount: 0, hasChildren: false,
+    };
+    const second: TreeNodeSummary = {
+      pointer: '/second', key: 'second', type: 'string', preview: 'second preview', childCount: 0, hasChildren: false,
+    };
+    const loadChildren = vi.fn(async (): Promise<TreeChildrenResult> => ({
+      parentPointer: '', parent: root, offset: 0, total: 2, children: [first, second],
+    }));
+    let resolveFirst!: (value: JsonlValueChunkResult) => void;
+    const firstValue = new Promise<JsonlValueChunkResult>((resolve) => { resolveFirst = resolve; });
+    const loadValue = vi.fn((pointer: string): Promise<JsonlValueChunkResult> => pointer === '/first'
+      ? firstValue
+      : Promise.resolve({
+          physicalLine: 4, pointer, offset: 0, nextOffset: 17, totalChars: 17,
+          chunk: '"second complete"', done: true, completeAvailable: true,
+        }));
+    const view = render(React.createElement(TreeExplorer, {
+      root, physicalLine: 4, loadChildren, loadValue, editable: true,
+    }));
+
+    fireEvent.click(view.container.querySelector('button.twisty')!);
+    const firstLabel = await screen.findByText('first');
+    fireEvent.click(firstLabel.closest('[role="treeitem"]')!);
+    await waitFor(() => expect(loadValue).toHaveBeenCalledWith('/first', 0, 128 * 1024));
+    fireEvent.click(screen.getByText('second').closest('[role="treeitem"]')!);
+    await screen.findByText('second complete');
+
+    resolveFirst({
+      physicalLine: 4, pointer: '/first', offset: 0, nextOffset: 13, totalChars: 13,
+      chunk: '"first stale"', done: true, completeAvailable: true,
+    });
+    await waitFor(() => expect(screen.getByText('second complete')).toBeTruthy());
+    expect(screen.queryByText('first stale')).toBeNull();
+  });
+
+  it('loads complete read-only JSONL values without exposing edit controls', async () => {
+    const raw = '{"message":"complete"}';
+    const root: TreeNodeSummary = {
+      pointer: '', key: 'Record', type: 'object', preview: '{1 property}', childCount: 1, hasChildren: true,
+    };
+    render(React.createElement(TreeExplorer, {
+      root,
+      physicalLine: 2,
+      editable: false,
+      readOnlyReason: 'This file is above the JSONL edit limit.',
+      loadChildren: vi.fn(),
+      loadValue: vi.fn(async (pointer: string) => ({
+        physicalLine: 2, pointer, offset: 0, nextOffset: raw.length, totalChars: raw.length,
+        chunk: raw, done: true, completeAvailable: true,
+      })),
+    }));
+
+    await screen.findByText(/"message": "complete"/);
+    expect(screen.queryByRole('button', { name: 'Edit value' })).toBeNull();
+    expect(screen.getByText('This file is above the JSONL edit limit.')).toBeTruthy();
   });
 
   it('adds a property and refreshes only the edited container page', async () => {

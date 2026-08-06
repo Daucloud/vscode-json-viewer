@@ -7,6 +7,7 @@ import type {
   JsonlQueryResult,
   JsonlQuerySpec,
   JsonlRow,
+  JsonlValueChunkResult,
   StructuredFilter,
   TreeChildrenResult,
   WorkerEvent,
@@ -62,11 +63,13 @@ export function JsonlView({
   result,
   editable,
   pageSize,
+  readOnlyReason,
   workerEvent,
 }: {
   result: JsonlOpenResult;
   editable: boolean;
   pageSize: number;
+  readOnlyReason?: string;
   workerEvent?: WorkerEvent;
 }): React.JSX.Element {
   const persisted = api.state();
@@ -601,6 +604,8 @@ export function JsonlView({
           editable={editable}
           physicalLine={selected.physicalLine}
           loadChildren={(pointer, offset, limit) => api.request<TreeChildrenResult>({ type: 'jsonl/treeChildren', physicalLine: selected.physicalLine, pointer, offset, limit })}
+          loadValue={(pointer, offset, limit) => api.request<JsonlValueChunkResult>({ type: 'jsonl/valueChunk', physicalLine: selected.physicalLine, pointer, offset, limit })}
+          {...(readOnlyReason ? { readOnlyReason } : {})}
           {...(persisted.expandedRow ? { initialExpanded: persisted.expandedRow } : {})}
           onExpandedChange={(paths) => api.updateState({ expandedRow: paths })}
           onEdit={editRow}

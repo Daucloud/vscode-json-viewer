@@ -24,6 +24,7 @@ export type ViewerAction =
   | { type: 'jsonl/page'; queryId: string; offset: number; limit: number }
   | { type: 'jsonl/query'; queryId: string; spec: JsonlQuerySpec }
   | { type: 'jsonl/treeChildren'; physicalLine: number; pointer: string; offset: number; limit: number }
+  | { type: 'jsonl/valueChunk'; physicalLine: number; pointer: string; offset: number; limit: number }
   | { type: 'edit'; edit: ViewerEdit }
   | { type: 'cancel'; targetRequestId: string }
   | { type: 'copy'; text: string }

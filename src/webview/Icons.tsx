@@ -15,6 +15,7 @@ export type IconName =
   | 'fileCode'
   | 'filter'
   | 'info'
+  | 'lock'
   | 'maximize'
   | 'plus'
   | 'refresh'
@@ -47,6 +48,7 @@ const drawings: Record<IconName, React.ReactNode> = {
   fileCode: <><path d="M4 1.8h5l3 3v9.4H4z"/><path d="M9 1.8v3h3"/><path d="m7 8-1.5 1.5L7 11"/><path d="m9 8 1.5 1.5L9 11"/></>,
   filter: <path d="M2.5 3h11L9.3 8v4.2l-2.6 1.3V8z"/>,
   info: <><circle cx="8" cy="8" r="5.6"/><path d="M8 7.1v4"/><path d="M8 4.7h.01"/></>,
+  lock: <><rect x="3.2" y="7" width="9.6" height="6.5" rx="1.2"/><path d="M5.2 7V5a2.8 2.8 0 0 1 5.6 0v2"/><path d="M8 9.5v1.7"/></>,
   maximize: <><path d="M2.5 6V2.5H6"/><path d="m2.8 2.8 3.6 3.6"/><path d="M10 2.5h3.5V6"/><path d="m13.2 2.8-3.6 3.6"/><path d="M2.5 10v3.5H6"/><path d="m2.8 13.2 3.6-3.6"/><path d="M10 13.5h3.5V10"/><path d="m13.2 13.2-3.6-3.6"/></>,
   plus: <><path d="M8 3v10"/><path d="M3 8h10"/></>,
   refresh: <><path d="M13.2 6.2A5.4 5.4 0 0 0 3.6 4.4L2.5 5.7"/><path d="M2.5 2.8v2.9h2.9"/><path d="M2.8 9.8a5.4 5.4 0 0 0 9.6 1.8l1.1-1.3"/><path d="M13.5 13.2v-2.9h-2.9"/></>,

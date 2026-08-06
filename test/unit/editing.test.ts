@@ -32,6 +32,21 @@ describe('worker-side document edits', () => {
     expect(JSON.parse(lines[1]!)).toEqual({ items: ['first'] });
   });
 
+  it('replaces JSONL containers from raw literals without rounding unsafe integers', () => {
+    const text = '{"record":{"id":1}}\n{"record":{"id":2}}\n';
+    const edited = applyDocumentEdit(text, 'jsonl', {
+      kind: 'setRaw',
+      path: ['record'],
+      raw: '{\n  "id": 900719925474099312345,\n  "message": "space kept"\n}',
+      physicalLine: 2,
+    });
+    expect(edited).toBe('{"record":{"id":1}}\n{"record":{"id":900719925474099312345,"message":"space kept"}}\n');
+  });
+
+  it('rejects malformed raw value edits', () => {
+    expect(() => applyDocumentEdit('{"value":1}', 'json', { kind: 'setRaw', path: ['value'], raw: '{oops' })).toThrow(/valid JSON value/i);
+  });
+
   it('rejects JSONL edits without a selected physical line', () => {
     expect(() => applyDocumentEdit('{"id":1}', 'jsonl', { kind: 'set', path: ['id'], value: 2 })).toThrow(/record|line/i);
   });

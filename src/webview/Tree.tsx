@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { jqPathFromPath, joinPointer, parentPointer, pathFromPointer, pointerFromPath } from '../shared/pointer.js';
 import type { JsonPath } from '../shared/pointer.js';
-import type { TreeChildrenResult, TreeNodeSummary } from '../shared/types.js';
+import type { JsonlValueChunkResult, TreeChildrenResult, TreeNodeSummary } from '../shared/types.js';
 import type { ViewerEdit } from '../shared/webviewProtocol.js';
 import { api } from './api.js';
 import { Icon } from './Icons.js';
@@ -33,6 +33,20 @@ const EXPAND_PROGRESS_INTERVAL = 24;
 const DEFAULT_VALUE_VIEWER_HEIGHT = 220;
 const MIN_VALUE_VIEWER_HEIGHT = 96;
 const MAX_VALUE_VIEWER_HEIGHT = 640;
+const VALUE_CHUNK_CHARS = 128 * 1024;
+const AUTO_VALUE_LOAD_CHARS = 1024 * 1024;
+
+interface ValueLoadSnapshot {
+  pointer: string;
+  revision: number;
+  status: 'idle' | 'loading' | 'partial' | 'complete' | 'error';
+  loadedChars: number;
+  raw?: string;
+  nextOffset?: number;
+  totalChars?: number;
+  completeAvailable?: boolean;
+  error?: string;
+}
 
 function clampValueViewerHeight(height: number): number {
   if (!Number.isFinite(height)) return DEFAULT_VALUE_VIEWER_HEIGHT;
@@ -47,7 +61,9 @@ export interface TreeExplorerProps {
   root: TreeNodeSummary;
   loadChildren: (pointer: string, offset: number, limit: number) => Promise<TreeChildrenResult>;
   loadContainingChild?: (parentPointer: string, childPointer: string, limit: number) => Promise<TreeChildrenResult>;
+  loadValue?: (pointer: string, offset: number, limit: number) => Promise<JsonlValueChunkResult>;
   editable: boolean;
+  readOnlyReason?: string;
   physicalLine?: number;
   initialExpanded?: string[];
   initialSelected?: string;
@@ -106,6 +122,25 @@ export function valueViewerText(node: TreeNodeSummary): string {
   catch { return raw; }
 }
 
+function initialValueLoad(node: TreeNodeSummary, revision: number): ValueLoadSnapshot {
+  if (node.raw === undefined) return { pointer: node.pointer, revision, status: 'idle', loadedChars: 0 };
+  return {
+    pointer: node.pointer,
+    revision,
+    status: 'complete',
+    loadedChars: node.raw.length,
+    raw: node.raw,
+    totalChars: node.raw.length,
+    completeAvailable: true,
+  };
+}
+
+function formatChars(value: number): string {
+  if (value < 1_000) return `${value.toLocaleString()} characters`;
+  if (value < 1_000_000) return `${(value / 1_000).toFixed(value < 10_000 ? 1 : 0)}K characters`;
+  return `${(value / 1_000_000).toFixed(value < 10_000_000 ? 1 : 0)}M characters`;
+}
+
 async function copyFromWebview(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);
@@ -138,12 +173,18 @@ function Inspector({
   selected,
   entries,
   editable,
+  loadValue,
+  readOnlyReason,
+  valueRevision,
   physicalLine,
   onEdit,
 }: {
   selected: TreeNodeSummary;
   entries: ReadonlyMap<string, Entry>;
   editable: boolean;
+  loadValue?: (pointer: string, offset: number, limit: number) => Promise<JsonlValueChunkResult>;
+  readOnlyReason?: string;
+  valueRevision: number;
   physicalLine?: number;
   onEdit?: (edit: ViewerEdit) => Promise<void>;
 }): React.JSX.Element {
@@ -156,17 +197,122 @@ function Inspector({
   const [copyNotice, setCopyNotice] = useState<{ kind: 'success' | 'error'; message: string }>();
   const [valueViewerFullscreen, setValueViewerFullscreen] = useState(false);
   const [valueEditing, setValueEditing] = useState(false);
+  const [valueLoad, setValueLoad] = useState<ValueLoadSnapshot>(() => initialValueLoad(selected, valueRevision));
   const [valueViewerHeight, setValueViewerHeight] = useState(() => clampValueViewerHeight(api.state().valueViewerHeight ?? DEFAULT_VALUE_VIEWER_HEIGHT));
   const valueViewerHeightRef = useRef(valueViewerHeight);
+  const valueLoadRef = useRef(valueLoad);
+  const valueLoadGeneration = useRef(0);
+  const loadValueRef = useRef(loadValue);
   const activeValueResize = useRef<{ pointerId: number; startY: number; startHeight: number; target: HTMLElement } | undefined>(undefined);
   const copyNoticeTimer = useRef<number | undefined>(undefined);
   const parent = selected.pointer === '' ? undefined : entries.get(parentPointer(selected.pointer) ?? '')?.node;
+  loadValueRef.current = loadValue;
+
+  const commitValueLoad = useCallback((next: ValueLoadSnapshot): void => {
+    valueLoadRef.current = next;
+    setValueLoad(next);
+  }, []);
+  const activeValueLoad = valueLoad.pointer === selected.pointer && valueLoad.revision === valueRevision ? valueLoad : undefined;
+  const completeRaw = selected.raw ?? (activeValueLoad?.status === 'complete' ? activeValueLoad.raw : undefined);
+  const partialRaw = selected.raw === undefined && activeValueLoad?.status !== 'complete' ? activeValueLoad?.raw : undefined;
+
+  const loadSelectedValue = useCallback(async (loadAll: boolean, editAfterLoad = false): Promise<void> => {
+    const loader = loadValueRef.current;
+    if (!loader) return;
+    const pointer = selected.pointer;
+    const revision = valueRevision;
+    const generation = ++valueLoadGeneration.current;
+    const current = valueLoadRef.current.pointer === pointer && valueLoadRef.current.revision === revision
+      ? valueLoadRef.current
+      : undefined;
+    if (loadAll && current?.status === 'partial' && current.completeAvailable === false) return;
+
+    const parts: string[] = [];
+    let offset = 0;
+    if (loadAll && current?.status === 'partial' && current.raw !== undefined) {
+      parts.push(current.raw);
+      offset = current.nextOffset ?? current.raw.length;
+    }
+    const loading: ValueLoadSnapshot = {
+      pointer,
+      revision,
+      status: 'loading',
+      loadedChars: offset,
+      ...(current?.raw !== undefined ? { raw: current.raw } : {}),
+      ...(current?.totalChars !== undefined ? { totalChars: current.totalChars } : {}),
+      ...(current?.completeAvailable !== undefined ? { completeAvailable: current.completeAvailable } : {}),
+    };
+    commitValueLoad(loading);
+
+    try {
+      while (true) {
+        const response = await loader(pointer, offset, VALUE_CHUNK_CHARS);
+        if (valueLoadGeneration.current !== generation) return;
+        if (response.pointer !== pointer || response.offset !== offset) throw new Error('The value loader returned a mismatched chunk.');
+        parts.push(response.chunk);
+        if (!response.done && response.nextOffset <= offset) throw new Error('The value loader did not make progress.');
+        offset = response.nextOffset;
+
+        if ((!loadAll && response.totalChars > AUTO_VALUE_LOAD_CHARS) || (!response.done && !response.completeAvailable)) {
+          commitValueLoad({
+            pointer,
+            revision,
+            status: 'partial',
+            loadedChars: offset,
+            raw: parts.join(''),
+            nextOffset: offset,
+            totalChars: response.totalChars,
+            completeAvailable: response.completeAvailable,
+          });
+          return;
+        }
+        if (response.done) {
+          const raw = parts.join('');
+          commitValueLoad({
+            pointer,
+            revision,
+            status: 'complete',
+            loadedChars: raw.length,
+            raw,
+            totalChars: response.totalChars,
+            completeAvailable: true,
+          });
+          setValueText(raw);
+          if (editAfterLoad) {
+            setError(undefined);
+            setValueEditing(true);
+          }
+          return;
+        }
+        commitValueLoad({
+          pointer,
+          revision,
+          status: 'loading',
+          loadedChars: offset,
+          ...(current?.raw !== undefined ? { raw: current.raw } : {}),
+          totalChars: response.totalChars,
+          completeAvailable: response.completeAvailable,
+        });
+      }
+    } catch (caught) {
+      if (valueLoadGeneration.current !== generation) return;
+      commitValueLoad({
+        pointer,
+        revision,
+        status: 'error',
+        loadedChars: offset,
+        ...(current?.raw !== undefined ? { raw: current.raw } : {}),
+        ...(current?.totalChars !== undefined ? { totalChars: current.totalChars } : {}),
+        error: caught instanceof Error ? caught.message : String(caught),
+      });
+    }
+  }, [commitValueLoad, selected.pointer, valueRevision]);
 
   const cancelValueEdit = useCallback((): void => {
-    setValueText(selected.raw ?? selected.preview);
+    setValueText(completeRaw ?? selected.preview);
     setValueEditing(false);
     setError(undefined);
-  }, [selected.preview, selected.raw]);
+  }, [completeRaw, selected.preview]);
 
   useEffect(() => {
     setValueText(selected.raw ?? selected.preview);
@@ -178,11 +324,16 @@ function Inspector({
   }, [selected.pointer]);
 
   useEffect(() => {
-    // A successful edit replaces the selected summary object in place. Keep a
-    // full-screen session open, but refresh its literal once edit mode ends.
+    valueLoadGeneration.current++;
+    const initial = initialValueLoad(selected, valueRevision);
+    commitValueLoad(initial);
     if (!valueEditing) setValueText(selected.raw ?? selected.preview);
     setNewKey(selected.key);
-  }, [selected.key, selected.preview, selected.raw, valueEditing]);
+    if (selected.raw === undefined && loadValueRef.current) void loadSelectedValue(false);
+    return () => { valueLoadGeneration.current++; };
+    // valueEditing deliberately does not restart a value transfer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected.pointer, selected.key, selected.preview, selected.raw, valueRevision, commitValueLoad, loadSelectedValue]);
 
   useEffect(() => {
     const resizeValueViewer = (event: PointerEvent): void => {
@@ -244,22 +395,31 @@ function Inspector({
   };
   const path = typedPath(selected.pointer, entries);
   const jqPath = jqPathFromPath(path);
-  const displayedValue = valueViewerText(selected);
+  const displayedValue = useMemo(() => {
+    if (completeRaw !== undefined) return valueViewerText({ ...selected, raw: completeRaw });
+    if (partialRaw !== undefined) return `${partialRaw}\n…`;
+    return selected.preview;
+  }, [completeRaw, partialRaw, selected]);
   const withLine = physicalLine === undefined ? {} : { physicalLine };
   const isContainer = selected.type === 'object' || selected.type === 'array';
-  const canEditValue = editable && !isContainer && selected.raw !== undefined;
+  const canEditValue = editable && completeRaw !== undefined;
+  const canLoadCompleteValue = activeValueLoad?.status === 'partial' && activeValueLoad.completeAvailable !== false;
+  const valueLoading = activeValueLoad?.status === 'loading';
   const applyValue = async (): Promise<void> => {
-    let value: unknown;
     try {
-      value = parseValue(valueText);
+      parseValue(valueText);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       return;
     }
-    if (await runEdit({ kind: 'set', path, value, ...withLine })) setValueEditing(false);
+    if (await runEdit({ kind: 'setRaw', path, raw: valueText, ...withLine })) setValueEditing(false);
   };
   const openValueEditor = (): void => {
-    setValueText(selected.raw ?? selected.preview);
+    if (completeRaw === undefined) {
+      void loadSelectedValue(true, true);
+      return;
+    }
+    setValueText(completeRaw);
     setError(undefined);
     setValueEditing(true);
   };
@@ -349,18 +509,23 @@ function Inspector({
 
       <section className="inspector-section value-section">
         <div className="value-viewer-heading">
-          <div className="value-viewer-label"><span className="meta-label">Value</span>{valueEditing && <span className="value-mode">Editing JSON literal</span>}</div>
+          <div className="value-viewer-label"><span className="meta-label">Value</span>{valueEditing
+            ? <span className="value-mode">Editing JSON literal</span>
+            : valueLoading
+              ? <span className="value-mode">Loading complete value…</span>
+              : activeValueLoad?.status === 'partial' && <span className="value-mode">Safe preview</span>}</div>
           <div className="value-viewer-actions">
             {canEditValue && (valueEditing
               ? <><button className="ghost-button" onClick={cancelValueEdit}>Cancel</button><button className="primary" aria-label="Apply value" onClick={() => void applyValue()}><Icon name="check" />Apply</button></>
               : <button className="ghost-button" title="Edit as a JSON literal" aria-label="Edit value" onClick={openValueEditor}><Icon name="braces" />Edit</button>)}
+            {!canEditValue && editable && canLoadCompleteValue && <button className="ghost-button" title="Load the complete value and edit it" aria-label="Load value to edit" onClick={() => void loadSelectedValue(true, true)}><Icon name="braces" />Load to edit</button>}
             <button className="icon-button ghost-button" title="View value full screen" aria-label="View value full screen" onClick={() => setValueViewerFullscreen(true)}><Icon name="maximize" /></button>
           </div>
         </div>
         <div className={`value-surface ${valueEditing ? 'editing' : ''}`} style={{ height: valueViewerHeight }}>
           {valueEditing
             ? <textarea className="value-editor" aria-label="JSON value" autoFocus spellCheck={false} value={valueText} onChange={(event) => setValueText(event.target.value)} onKeyDown={handleValueEditorKeyDown} />
-            : <pre className={`value-viewer type-${selected.type}`} title={selected.raw === undefined ? selected.preview : undefined}>{displayedValue}</pre>}
+            : <pre className={`value-viewer type-${selected.type}`}>{displayedValue}</pre>}
         </div>
         <div
           className="value-resize-handle"
@@ -377,17 +542,25 @@ function Inspector({
           onDoubleClick={() => updateValueViewerHeight(DEFAULT_VALUE_VIEWER_HEIGHT)}
         ><span /></div>
         {valueEditing && <span className="value-editor-hint"><kbd>⌘/Ctrl</kbd> + <kbd>Enter</kbd> to apply · <kbd>Esc</kbd> to cancel</span>}
-        {selected.raw === undefined && <span className="value-viewer-note"><Icon name="info" />This value is too large to transfer inline. The structured tree remains fully available.</span>}
+        {valueLoading && <span className="value-viewer-note" role="status"><span className="button-spinner" /><span>Loading the complete value in bounded chunks{activeValueLoad?.totalChars !== undefined ? ` · ${formatChars(activeValueLoad.loadedChars)} of ${formatChars(activeValueLoad.totalChars)}` : '…'}</span></span>}
+        {activeValueLoad?.status === 'partial' && <span className="value-viewer-note"><Icon name="info" /><span>Showing {formatChars(activeValueLoad.loadedChars)} of {formatChars(activeValueLoad.totalChars ?? activeValueLoad.loadedChars)} to keep the viewer responsive. {activeValueLoad.completeAvailable === false
+          ? 'The complete value exceeds the safe in-view memory limit; use Open source instead.'
+          : <button className="value-note-action" onClick={() => void loadSelectedValue(true)}>Load complete value</button>}</span></span>}
+        {activeValueLoad?.status === 'error' && <span className="value-viewer-note value-load-error"><Icon name="error" /><span>Could not load the complete value: {activeValueLoad.error} <button className="value-note-action" onClick={() => void loadSelectedValue(false)}>Retry</button></span></span>}
+        {selected.raw === undefined && !loadValue && <span className="value-viewer-note"><Icon name="info" />This value is too large to transfer inline. The structured tree remains fully available.</span>}
+        {readOnlyReason && <span className="value-viewer-note"><Icon name="lock" />{readOnlyReason}</span>}
       </section>
 
       {valueViewerFullscreen && createPortal(<section className="value-viewer-fullscreen" role="dialog" aria-modal="true" aria-label={`Value viewer for ${selected.pointer || '/'}`}>
         <header className="value-viewer-fullscreen-header">
           <div className="value-viewer-title"><span className={`inspector-type-mark type-${selected.type}`}>{typeGlyph(selected)}</span><div><span className="eyebrow">Value</span><strong title={jqPath}>{jqPath}</strong></div></div>
           <div className="value-viewer-fullscreen-actions">
-            <button disabled={selected.raw === undefined || copying !== undefined} onClick={() => void copy('value', selected.raw ?? selected.preview)}><Icon name="copy" />Copy value</button>
+            <button disabled={completeRaw === undefined || copying !== undefined} onClick={() => { if (completeRaw !== undefined) void copy('value', completeRaw); }}><Icon name="copy" />Copy value</button>
+            {completeRaw === undefined && canLoadCompleteValue && <button onClick={() => void loadSelectedValue(true)}><Icon name="refresh" />Load complete value</button>}
             {canEditValue && (valueEditing
               ? <><button onClick={cancelValueEdit}>Cancel</button><button className="primary" onClick={() => void applyValue()}><Icon name="check" />Apply value</button></>
               : <button onClick={openValueEditor}><Icon name="braces" />Edit value</button>)}
+            {!canEditValue && editable && canLoadCompleteValue && <button onClick={() => void loadSelectedValue(true, true)}><Icon name="braces" />Load to edit</button>}
             <button className={valueEditing ? '' : 'primary'} autoFocus={!valueEditing} onClick={() => setValueViewerFullscreen(false)}><Icon name="restore" />Exit full screen</button>
           </div>
         </header>
@@ -397,8 +570,8 @@ function Inspector({
       </section>, document.body)}
 
       <div className="inspector-actions">
-        <button disabled={selected.raw === undefined || copying !== undefined} title={selected.raw === undefined ? 'This value exceeds the safe inline copy limit.' : 'Copy the complete JSON value'}
-          onClick={() => void copy('value', selected.raw ?? selected.preview)}>{copying === 'value' ? <><span className="button-spinner" />Copying</> : <><Icon name="copy" />Copy value</>}</button>
+        <button disabled={completeRaw === undefined || copying !== undefined} title={completeRaw === undefined ? 'Load the complete value before copying it.' : 'Copy the complete JSON value'}
+          onClick={() => { if (completeRaw !== undefined) void copy('value', completeRaw); }}>{copying === 'value' ? <><span className="button-spinner" />Copying</> : <><Icon name="copy" />Copy value</>}</button>
         <button onClick={() => api.command({ type: 'revealSource', path, ...(physicalLine ? { physicalLine } : {}) })}><Icon name="external" />Source</button>
       </div>
       {copyNotice && <div className={`copy-notice ${copyNotice.kind}`} role={copyNotice.kind === 'error' ? 'alert' : 'status'}><Icon name={copyNotice.kind === 'error' ? 'error' : 'check'} />{copyNotice.message}</div>}
@@ -436,6 +609,7 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
   const pendingFocusPointer = useRef<string | undefined>(undefined);
   const [expandingTree, setExpandingTree] = useState(false);
   const [expansionStatus, setExpansionStatus] = useState<string>();
+  const [valueRevision, setValueRevision] = useState(0);
   const expansionCancelRequested = useRef(false);
   const expansionGeneration = useRef(0);
 
@@ -451,6 +625,7 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
     setExpansionStatus(undefined);
     const next = new Map<string, Entry>([[props.root.pointer, { node: props.root }]]);
     commitEntries(next);
+    setValueRevision(0);
     setExpandedState(new Set(props.initialExpanded ?? []));
     setSelectedPointer(props.initialSelected ?? props.root.pointer);
     // `initialExpanded` and `initialSelected` are bootstrap snapshots. A
@@ -573,9 +748,10 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
     await props.onEdit(edit);
 
     const editedPointer = pointerFromPath(edit.path);
-    if (edit.kind === 'set') {
+    if (edit.kind === 'set' || edit.kind === 'setRaw') {
       const result = await props.loadChildren(editedPointer, 0, 200);
       replaceTreePage(editedPointer, result);
+      setValueRevision((current) => current + 1);
       if (!result.parent?.hasChildren) {
         const nextExpanded = new Set(expanded);
         nextExpanded.delete(editedPointer);
@@ -590,6 +766,7 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
     const result = await props.loadChildren(containerPointer, offset, 200);
     if (edit.kind === 'delete' || edit.kind === 'rename') removeTreeBranch(editedPointer);
     replaceTreePage(containerPointer, result);
+    setValueRevision((current) => current + 1);
 
     if (edit.kind === 'delete') {
       setSelectedPointer(containerPointer);
@@ -991,6 +1168,15 @@ export function TreeExplorer(props: TreeExplorerProps): React.JSX.Element {
         </div>
       </div>
     </section>
-    <Inspector selected={selected} entries={entries} editable={props.editable} {...(props.physicalLine ? { physicalLine: props.physicalLine } : {})} {...(props.onEdit ? { onEdit: editAndRefresh } : {})} />
+    <Inspector
+      selected={selected}
+      entries={entries}
+      editable={props.editable}
+      valueRevision={valueRevision}
+      {...(props.loadValue ? { loadValue: props.loadValue } : {})}
+      {...(props.readOnlyReason ? { readOnlyReason: props.readOnlyReason } : {})}
+      {...(props.physicalLine ? { physicalLine: props.physicalLine } : {})}
+      {...(props.onEdit ? { onEdit: editAndRefresh } : {})}
+    />
   </ResizableSplit>;
 }

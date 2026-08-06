@@ -11,6 +11,7 @@ import type {
   JsonlQueryResult,
   JsonlQuerySpec,
   JsonlRow,
+  JsonlValueChunkResult,
   PreviewSettings,
   QueryProgressEvent,
   SourceSignature,
@@ -19,7 +20,7 @@ import type {
 } from '../shared/types.js';
 import type { WorkerSource } from './protocol.js';
 import { PreviewError } from './errors.js';
-import { collectUnsafeIntegers, JsonEngine } from './jsonEngine.js';
+import { collectUnsafeIntegers, JsonEngine, jsonLiteralAtPointer } from './jsonEngine.js';
 import { compactSortValue, compareSortValues, flattenForTable, matchesStructuredFilter } from './filter.js';
 import { computeFileSignature, DiskLineIndex, type LineRecord } from './lineIndex.js';
 import { ResultIndex, ResultIndexWriter, type ResultRecord } from './resultIndex.js';
@@ -36,6 +37,12 @@ const MAX_INITIAL_PAYLOAD_BYTES = 700 * 1024;
 const RESULT_PREFIX = 'query-';
 const TREE_CACHE_MAX_ENTRIES = 8;
 const TREE_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+const MAX_VALUE_CHUNK_CHARS = 128 * 1024;
+const VALUE_CACHE_MAX_ENTRIES = 4;
+// The normal JSONL parse limit is 16 MB. Keep one default-limit record hot for
+// chunked viewing without allowing a custom 256 MB line limit to pin an equally
+// large UTF-16 string in the worker.
+const VALUE_CACHE_MAX_CHARS = 16 * 1024 * 1024;
 const UTF8_ENCODER = new TextEncoder();
 const EMPTY_EXACT_NUMBERS: ReadonlyMap<string, string> = new Map();
 
@@ -70,6 +77,11 @@ interface SortableRecord extends ResultRecord {
 interface TreeCacheEntry {
   engine: JsonEngine;
   sourceBytes: number;
+}
+
+interface ValueCacheEntry {
+  literal: string;
+  chars: number;
 }
 
 type EventSink = (event: WorkerEvent) => void;
@@ -259,6 +271,8 @@ export class JsonlEngine {
   private readonly activeResultPaths = new Set<string>();
   private readonly treeCache = new Map<number, TreeCacheEntry>();
   private treeCacheBytes = 0;
+  private readonly valueCache = new Map<string, ValueCacheEntry>();
+  private valueCacheChars = 0;
   private readWindow?: { start: number; bytes: Uint8Array };
   private closed = false;
   private sourceInvalid = false;
@@ -564,6 +578,84 @@ export class JsonlEngine {
     return bytes.subarray(0, Math.min(length, bytes.length));
   }
 
+  private async recordText(physicalLine: number, cancelled: () => boolean): Promise<{ raw: string; sourceBytes: number }> {
+    if (!Number.isSafeInteger(physicalLine) || physicalLine < 1) {
+      throw new PreviewError('LINE_NOT_FOUND', 'Select a valid JSONL record.');
+    }
+    const index = await this.awaitIndex(() => this.sourceInvalid || cancelled());
+    if (physicalLine > index.lineCount) throw new PreviewError('LINE_NOT_FOUND', `Line ${physicalLine} does not exist.`);
+    if (cancelled()) throw new PreviewError('CANCELLED', 'Value request cancelled.');
+    const record = await index.get(physicalLine - 1);
+    if (record.contentLength > this.settings.maxLineBytes) {
+      throw new PreviewError('LINE_TOO_LARGE', 'This record is too large for the tree inspector.');
+    }
+    let raw: string;
+    try {
+      raw = new TextDecoder('utf-8', { fatal: true }).decode(await this.bytes(record.start, record.contentLength));
+    } catch (error) {
+      throw new PreviewError('INVALID_UTF8', error instanceof Error ? error.message : 'This record is not valid UTF-8.');
+    }
+    if (physicalLine === 1 && raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+    if (cancelled()) throw new PreviewError('CANCELLED', 'Value request cancelled.');
+    return { raw, sourceBytes: record.contentLength };
+  }
+
+  private async treeForLine(physicalLine: number, cancelled: () => boolean): Promise<JsonEngine> {
+    const cached = this.treeCache.get(physicalLine);
+    if (cached) {
+      // Promote the entry to the MRU end of the insertion-ordered map.
+      this.treeCache.delete(physicalLine);
+      this.treeCache.set(physicalLine, cached);
+      return cached.engine;
+    }
+
+    const record = await this.recordText(physicalLine, cancelled);
+    const tree = JsonEngine.parse(record.raw);
+    // Do not retain a single record larger than the whole cache budget;
+    // keeping it transient is safer than pinning a 100+ MB object graph.
+    if (record.sourceBytes <= TREE_CACHE_MAX_BYTES) {
+      const entry = { engine: tree, sourceBytes: record.sourceBytes };
+      this.treeCache.set(physicalLine, entry);
+      this.treeCacheBytes += entry.sourceBytes;
+      while ((this.treeCache.size > TREE_CACHE_MAX_ENTRIES || this.treeCacheBytes > TREE_CACHE_MAX_BYTES) && this.treeCache.size > 1) {
+        const oldestKey = this.treeCache.keys().next().value;
+        if (oldestKey === undefined) break;
+        const oldest = this.treeCache.get(oldestKey);
+        this.treeCache.delete(oldestKey);
+        this.treeCacheBytes -= oldest?.sourceBytes ?? 0;
+      }
+    }
+    return tree;
+  }
+
+  private cachedValueLiteral(key: string): string | undefined {
+    const cached = this.valueCache.get(key);
+    if (!cached) return undefined;
+    this.valueCache.delete(key);
+    this.valueCache.set(key, cached);
+    return cached.literal;
+  }
+
+  private rememberValueLiteral(key: string, literal: string): boolean {
+    if (literal.length > VALUE_CACHE_MAX_CHARS) return false;
+    const previous = this.valueCache.get(key);
+    if (previous) {
+      this.valueCache.delete(key);
+      this.valueCacheChars -= previous.chars;
+    }
+    const entry = { literal, chars: literal.length };
+    this.valueCache.set(key, entry);
+    this.valueCacheChars += entry.chars;
+    while ((this.valueCache.size > VALUE_CACHE_MAX_ENTRIES || this.valueCacheChars > VALUE_CACHE_MAX_CHARS) && this.valueCache.size > 1) {
+      const oldestKey = this.valueCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      const oldest = this.valueCache.get(oldestKey);
+      this.valueCache.delete(oldestKey);
+      this.valueCacheChars -= oldest?.chars ?? 0;
+    }
+    return true;
+  }
+
   private async lineContainsText(
     start: number,
     length: number,
@@ -803,36 +895,58 @@ export class JsonlEngine {
 
   async treeChildren(physicalLine: number, pointer: string, offset: number, limit: number, cancelled: () => boolean = () => false): Promise<TreeChildrenResult> {
     await this.assertSourceUnchanged();
-    let cached = this.treeCache.get(physicalLine);
-    let tree = cached?.engine;
-    if (cached) {
-      // Promote the entry to the MRU end of the insertion-ordered map.
-      this.treeCache.delete(physicalLine);
-      this.treeCache.set(physicalLine, cached);
-    }
-    if (!tree) {
-      const index = await this.awaitIndex(() => this.sourceInvalid || cancelled());
-      const record = await index.get(physicalLine - 1);
-      if (record.contentLength > this.settings.maxLineBytes) throw new PreviewError('LINE_TOO_LARGE', 'This record is too large for the tree inspector.');
-      let raw = new TextDecoder('utf-8', { fatal: true }).decode(await this.bytes(record.start, record.contentLength));
-      if (physicalLine === 1 && raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
-      tree = JsonEngine.parse(raw);
-      // Do not retain a single record larger than the whole cache budget;
-      // keeping it transient is safer than pinning a 100+ MB object graph.
-      if (record.contentLength <= TREE_CACHE_MAX_BYTES) {
-        cached = { engine: tree, sourceBytes: record.contentLength };
-        this.treeCache.set(physicalLine, cached);
-        this.treeCacheBytes += cached.sourceBytes;
-        while ((this.treeCache.size > TREE_CACHE_MAX_ENTRIES || this.treeCacheBytes > TREE_CACHE_MAX_BYTES) && this.treeCache.size > 1) {
-          const oldestKey = this.treeCache.keys().next().value;
-          if (oldestKey === undefined) break;
-          const oldest = this.treeCache.get(oldestKey);
-          this.treeCache.delete(oldestKey);
-          this.treeCacheBytes -= oldest?.sourceBytes ?? 0;
-        }
-      }
-    }
+    const tree = await this.treeForLine(physicalLine, cancelled);
     const result = tree.children(pointer, offset, limit);
+    await this.assertSourceUnchanged();
+    return result;
+  }
+
+  async valueChunk(
+    physicalLine: number,
+    pointer: string,
+    offset: number,
+    requestedLimit: number,
+    cancelled: () => boolean = () => false,
+  ): Promise<JsonlValueChunkResult> {
+    await this.assertSourceUnchanged();
+    const key = `${physicalLine}\0${pointer}`;
+    let literal = this.cachedValueLiteral(key);
+    let completeAvailable = literal !== undefined;
+    if (literal === undefined) {
+      const record = await this.recordText(physicalLine, cancelled);
+      literal = jsonLiteralAtPointer(record.raw, pointer);
+      completeAvailable = this.rememberValueLiteral(key, literal);
+    }
+    if (cancelled()) throw new PreviewError('CANCELLED', 'Value request cancelled.');
+
+    let safeOffset = Number.isSafeInteger(offset) ? Math.max(0, Math.min(literal.length, offset)) : 0;
+    // Never begin or end a response between a UTF-16 surrogate pair. The
+    // client advances with nextOffset, so a non-BMP character remains intact.
+    if (safeOffset > 0 && safeOffset < literal.length) {
+      const current = literal.charCodeAt(safeOffset);
+      const previous = literal.charCodeAt(safeOffset - 1);
+      if (current >= 0xdc00 && current <= 0xdfff && previous >= 0xd800 && previous <= 0xdbff) safeOffset--;
+    }
+    if (!completeAvailable && safeOffset > 0) {
+      throw new PreviewError('VALUE_TOO_LARGE', `This value exceeds the safe ${VALUE_CACHE_MAX_CHARS.toLocaleString()}-character in-view limit. Open the source to inspect it without pinning another full copy in memory.`);
+    }
+    const limit = Math.min(MAX_VALUE_CHUNK_CHARS, Math.max(1, Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : MAX_VALUE_CHUNK_CHARS));
+    let nextOffset = Math.min(literal.length, safeOffset + limit);
+    if (nextOffset < literal.length) {
+      const previous = literal.charCodeAt(nextOffset - 1);
+      const current = literal.charCodeAt(nextOffset);
+      if (previous >= 0xd800 && previous <= 0xdbff && current >= 0xdc00 && current <= 0xdfff) nextOffset++;
+    }
+    const result: JsonlValueChunkResult = {
+      physicalLine,
+      pointer,
+      offset: safeOffset,
+      nextOffset,
+      totalChars: literal.length,
+      chunk: literal.slice(safeOffset, nextOffset),
+      done: nextOffset >= literal.length,
+      completeAvailable,
+    };
     await this.assertSourceUnchanged();
     return result;
   }
@@ -849,6 +963,8 @@ export class JsonlEngine {
     this.results.clear();
     this.treeCache.clear();
     this.treeCacheBytes = 0;
+    this.valueCache.clear();
+    this.valueCacheChars = 0;
     if (this.index) await this.index.close();
     if (this.source.type === 'file') await this.source.handle.close();
   }
