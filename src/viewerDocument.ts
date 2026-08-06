@@ -515,6 +515,8 @@ export class ViewerDocument implements vscode.CustomDocument {
           return await client.request({ type: 'jsonl/query', sessionId: this.sessionId, queryId: action.queryId, spec: action.spec }, { requestId });
         case 'jsonl/treeChildren':
           return await client.request({ type: 'jsonl/treeChildren', sessionId: this.sessionId, physicalLine: action.physicalLine, pointer: action.pointer, offset: action.offset, limit: action.limit }, { requestId });
+        case 'jsonl/valueChunk':
+          return await client.request({ type: 'jsonl/valueChunk', sessionId: this.sessionId, physicalLine: action.physicalLine, pointer: action.pointer, offset: action.offset, limit: action.limit }, { requestId });
         default:
           throw new WorkerClientError('INVALID_ACTION', 'This action is handled by the editor host.');
       }

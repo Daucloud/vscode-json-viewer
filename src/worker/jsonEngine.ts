@@ -251,6 +251,49 @@ export function collectUnsafeIntegers(text: string, targetPointer?: string): Map
   return result;
 }
 
+/**
+ * Return the exact source literal for a JSON Pointer. Unlike a
+ * JSON.parse/JSON.stringify round trip, this preserves string escapes, object
+ * key order, and numeric lexemes beyond JavaScript's safe integer range.
+ * Duplicate object keys intentionally resolve to their last occurrence, which
+ * matches JSON.parse and the structured tree.
+ */
+export function jsonLiteralAtPointer(text: string, pointer: string): string {
+  try {
+    pathFromPointer(pointer);
+  } catch (error) {
+    throw new PreviewError('INVALID_POINTER', error instanceof Error ? error.message : 'Enter a valid JSON Pointer.');
+  }
+  if (pointer === '') return text;
+
+  let depth = 0;
+  let activeContainer: { start: number; depth: number } | undefined;
+  let literal: string | undefined;
+  const beginContainer = (offset: number, path: readonly (string | number)[]): void => {
+    if (pointerFromPath(path) === pointer) activeContainer = { start: offset, depth };
+    depth++;
+  };
+  const endContainer = (offset: number, length: number): void => {
+    depth--;
+    if (!activeContainer || activeContainer.depth !== depth) return;
+    literal = text.slice(activeContainer.start, offset + length);
+    activeContainer = undefined;
+  };
+
+  visit(text, {
+    onObjectBegin: (offset, _length, _line, _character, getPath) => beginContainer(offset, getPath()),
+    onObjectEnd: (offset, length) => endContainer(offset, length),
+    onArrayBegin: (offset, _length, _line, _character, getPath) => beginContainer(offset, getPath()),
+    onArrayEnd: (offset, length) => endContainer(offset, length),
+    onLiteralValue: (_value, offset, length, _line, _character, getPath) => {
+      if (pointerFromPath(getPath()) === pointer) literal = text.slice(offset, offset + length);
+    },
+  });
+
+  if (literal === undefined) throw new PreviewError('POINTER_NOT_FOUND', `JSON Pointer does not exist: ${pointer}`);
+  return literal;
+}
+
 function previewForValue(value: unknown, pointer: string, exactNumbers: ReadonlyMap<string, string>, includeContainerRaw: boolean, knownChildCount?: number): { preview: string; raw?: string } {
   const type = jsonValueType(value);
   if (type === 'object') {

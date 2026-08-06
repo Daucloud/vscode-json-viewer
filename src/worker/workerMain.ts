@@ -365,6 +365,8 @@ async function dispatch(request: WorkerRequest): Promise<WorkerResponseData> {
       return getJsonlSession(request.sessionId).engine.query(request.queryId, request.spec, request.requestId, cancelled(request.requestId));
     case 'jsonl/treeChildren':
       return getJsonlSession(request.sessionId).engine.treeChildren(request.physicalLine, request.pointer, request.offset, request.limit, cancelled(request.requestId));
+    case 'jsonl/valueChunk':
+      return getJsonlSession(request.sessionId).engine.valueChunk(request.physicalLine, request.pointer, request.offset, request.limit, cancelled(request.requestId));
     case 'cancel':
       if (activeRequests.has(request.targetRequestId)) cancelledRequests.add(request.targetRequestId);
       return { cancelled: true };

@@ -5,6 +5,7 @@ import type {
   JsonlPageResult,
   JsonlQueryResult,
   JsonlQuerySpec,
+  JsonlValueChunkResult,
   PreviewSettings,
   SessionOpenResult,
   SourceSignature,
@@ -38,6 +39,7 @@ export type WorkerRequestBody =
   | { type: 'jsonl/page'; sessionId: string; queryId: string; offset: number; limit: number }
   | { type: 'jsonl/query'; sessionId: string; queryId: string; spec: JsonlQuerySpec }
   | { type: 'jsonl/treeChildren'; sessionId: string; physicalLine: number; pointer: string; offset: number; limit: number }
+  | { type: 'jsonl/valueChunk'; sessionId: string; physicalLine: number; pointer: string; offset: number; limit: number }
   | { type: 'cancel'; sessionId: string; targetRequestId: string }
   | { type: 'cache/prune'; cacheDirectory: string; maxBytes: number }
   | { type: 'diagnostics/memory' };
@@ -51,6 +53,7 @@ export type WorkerResponseData =
   | JsonSourceLocation
   | JsonlPageResult
   | JsonlQueryResult
+  | JsonlValueChunkResult
   | { closed: true }
   | { reloaded: true; result: SessionOpenResult }
   | { edited: true; text: string; result: SessionOpenResult }

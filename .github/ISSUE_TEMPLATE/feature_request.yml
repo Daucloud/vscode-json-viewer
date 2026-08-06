@@ -1,0 +1,76 @@
+name: Feature request
+description: Suggest an improvement or a new workflow for the viewer
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to suggest an improvement. Describing the underlying workflow is especially helpful; a complete technical design is not required.
+
+  - type: checkboxes
+    id: existing-issues
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues and did not find the same request.
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Feature area
+      options:
+        - JSON tree and Inspector
+        - JSONL / NDJSON table and selected record
+        - Search, filtering, or sorting
+        - Editing and saving
+        - Large-file performance
+        - VS Code integration
+        - Documentation or distribution
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or workflow
+      description: What are you trying to accomplish, and what is difficult with the current viewer?
+      placeholder: Describe the real task or workflow before proposing a particular implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-experience
+    attributes:
+      label: Desired experience
+      description: What would you like the extension to do?
+    validations:
+      required: true
+
+  - type: input
+    id: data-shape
+    attributes:
+      label: Relevant file type and size
+      description: Include this when the request depends on JSON versus JSONL, data shape, or scale.
+      placeholder: "For example: nested JSON around 5 MB, or JSONL around 20 GB"
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Current alternatives
+      description: How do you handle this workflow today, if at all?
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Examples or references
+      description: Add a sanitized example, mockup, screenshot, or link that illustrates the request.
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Include any compatibility, performance, privacy, or accessibility considerations.

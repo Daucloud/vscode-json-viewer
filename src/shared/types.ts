@@ -5,6 +5,7 @@ export type JsonPath = Array<string | number>;
 
 export type JsonEditOperation =
   | { kind: 'set'; path: JsonPath; value: unknown; physicalLine?: number }
+  | { kind: 'setRaw'; path: JsonPath; raw: string; physicalLine?: number }
   | { kind: 'delete'; path: JsonPath; physicalLine?: number }
   | { kind: 'add'; path: JsonPath; value: unknown; insertArray?: boolean; physicalLine?: number }
   | { kind: 'rename'; path: JsonPath; newKey: string; physicalLine?: number };
@@ -86,6 +87,17 @@ export interface JsonlPageResult {
   offset: number;
   total: number;
   rows: JsonlRow[];
+}
+
+export interface JsonlValueChunkResult {
+  physicalLine: number;
+  pointer: string;
+  offset: number;
+  nextOffset: number;
+  totalChars: number;
+  chunk: string;
+  done: boolean;
+  completeAvailable: boolean;
 }
 
 export type FilterLiteral =

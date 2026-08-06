@@ -45,6 +45,12 @@ export function App(): React.JSX.Element {
   </div>;
   const result = bootstrap.openResult;
   const modeLabel = bootstrap.mode === 'editable' ? 'Editable' : bootstrap.mode === 'readonly' ? 'Read-only' : 'Safe preview';
+  const jsonlEditLimit = Math.min(bootstrap.settings.editableMaxBytes, 10 * 1024 * 1024);
+  const jsonlReadOnlyReason = !bootstrap.editable
+    ? bootstrap.fileSize > jsonlEditLimit
+      ? `This file is larger than the ${formatBytes(jsonlEditLimit)} JSONL edit limit and is open read-only.`
+      : 'This document requires byte-preserving streaming and is open read-only.'
+    : undefined;
 
   return <main className="app-shell">
     <header className="document-header">
@@ -93,6 +99,6 @@ export function App(): React.JSX.Element {
       </div>
     </section>}
     {bootstrap.mode !== 'fallback' && result?.kind === 'json' && <JsonView key={`${bootstrap.sessionId}:json`} result={result} editable={bootstrap.editable} />}
-    {bootstrap.mode !== 'fallback' && result?.kind === 'jsonl' && <JsonlView key={`${bootstrap.sessionId}:jsonl`} result={result} editable={bootstrap.editable} pageSize={bootstrap.settings.pageSize} {...(event ? { workerEvent: event } : {})} />}
+    {bootstrap.mode !== 'fallback' && result?.kind === 'jsonl' && <JsonlView key={`${bootstrap.sessionId}:jsonl`} result={result} editable={bootstrap.editable} pageSize={bootstrap.settings.pageSize} {...(jsonlReadOnlyReason ? { readOnlyReason: jsonlReadOnlyReason } : {})} {...(event ? { workerEvent: event } : {})} />}
   </main>;
 }

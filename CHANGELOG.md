@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format is based on 
 
 No unreleased changes.
 
+## 0.2.6 — 2026-08-06
+
+### JSONL value viewing and editing
+
+- Loaded complete selected-record and nested JSONL values in bounded chunks, with responsive partial previews and an explicit safe memory limit for unusually large values.
+- Enabled exact JSON-literal editing for primitive values, objects, arrays, and complete JSONL record roots while preserving unsafe integers, string escapes, and neighboring physical lines.
+- Added clear read-only guidance for JSONL files above the edit limit and kept selection, expansion, and surrounding table state intact after an edit.
+
+### Community workflow
+
+- Added structured bug-report and feature-request forms, private security-report guidance, and a focused pull-request template with testing and performance checks.
+
 ## 0.2.5 — 2026-08-03
 
 ### Tree navigation

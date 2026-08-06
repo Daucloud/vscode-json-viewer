@@ -58,6 +58,46 @@ describe('JsonlEngine', () => {
     await opened.engine.close();
   });
 
+  it('loads complete JSONL values above the inline limit in bounded chunks', async () => {
+    const source = JSON.stringify({ payload: 'x'.repeat(40_000), tail: true });
+    const opened = await openText(`${source}\n`);
+    const tree = await opened.engine.treeChildren(1, '', 0, 20);
+    expect(tree.parent?.raw).toBeUndefined();
+
+    const chunks: string[] = [];
+    let offset = 0;
+    while (true) {
+      const response = await opened.engine.valueChunk(1, '', offset, 5_000);
+      expect(response.offset).toBe(offset);
+      expect(response.chunk.length).toBeLessThanOrEqual(5_001);
+      chunks.push(response.chunk);
+      offset = response.nextOffset;
+      if (response.done) break;
+    }
+    expect(chunks.join('')).toBe(source);
+    await opened.engine.close();
+  });
+
+  it('preserves unsafe integer and escaped string literals in selected values', async () => {
+    const source = '{"nested":{"id":900719925474099312345,"message":"line\\nnext"}}';
+    const opened = await openText(source);
+    const response = await opened.engine.valueChunk(1, '/nested', 0, 128 * 1024);
+    expect(response).toMatchObject({ done: true, completeAvailable: true });
+    expect(response.chunk).toBe('{"id":900719925474099312345,"message":"line\\nnext"}');
+    await opened.engine.close();
+  });
+
+  it('keeps value chunks below the worker message budget and surrogate pairs intact', async () => {
+    const source = JSON.stringify('😀'.repeat(100_000));
+    const opened = await openText(source);
+    const first = await opened.engine.valueChunk(1, '', 0, Number.MAX_SAFE_INTEGER);
+    expect(Buffer.byteLength(JSON.stringify(first), 'utf8')).toBeLessThan(900 * 1024);
+    const tiny = await opened.engine.valueChunk(1, '', 0, 2);
+    expect(tiny.chunk).toBe('"😀');
+    expect(tiny.nextOffset).toBe(3);
+    await opened.engine.close();
+  });
+
   it('marks invalid UTF-8 on one file-backed record without affecting the next row', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'fast-jsonl-invalid-utf8-'));
     temporaryDirectories.push(directory);

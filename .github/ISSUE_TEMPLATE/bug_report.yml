@@ -1,0 +1,147 @@
+name: Bug report
+description: Report a reproducible problem with the JSON or JSONL viewer
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Fast JSON & JSONL Viewer.
+
+        Please use a sanitized sample whenever possible. Do not upload credentials, personal information, or production data.
+
+  - type: checkboxes
+    id: existing-issues
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues and did not find the same problem.
+          required: true
+
+  - type: input
+    id: extension-version
+    attributes:
+      label: Extension version
+      description: Find this in the Extensions view under Fast JSON & JSONL Viewer.
+      placeholder: "For example: 0.2.5"
+    validations:
+      required: true
+
+  - type: input
+    id: vscode-version
+    attributes:
+      label: VS Code version
+      description: Use Help → About, or run `code --version`.
+      placeholder: "For example: 1.103.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating system
+      description: For a remote workspace, select the operating system where the extension host runs.
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: operating-system-version
+    attributes:
+      label: Operating system version
+      description: For a remote workspace, enter the version of the remote operating system.
+      placeholder: "For example: macOS 15.6, Windows 11 24H2, or Ubuntu 24.04"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: workspace-environment
+    attributes:
+      label: Workspace environment
+      description: Select where the extension is running.
+      options:
+        - Local workspace
+        - Remote - SSH
+        - Remote - WSL
+        - Remote - Dev Container
+        - Other remote or virtual file system
+    validations:
+      required: true
+
+  - type: dropdown
+    id: file-type
+    attributes:
+      label: File type
+      description: Select every file type affected by the problem.
+      multiple: true
+      options:
+        - JSON (.json)
+        - JSON Lines (.jsonl)
+        - NDJSON (.ndjson)
+        - JSON Lines (.jsonlines)
+        - Not file-specific
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: file-size
+    attributes:
+      label: Approximate file size
+      description: File size affects parsing, editing, indexing, and rendering behavior. Enter N/A when the problem is not file-specific.
+      placeholder: "For example: 850 KB, 100 MB, 10 GB, or N/A"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the smallest reliable sequence of actions that triggers the problem.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Run ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: Actual behavior
+      description: Describe what happened, including any visible error message.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: Describe what you expected to happen instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: sample
+    attributes:
+      label: Sanitized sample or reproduction repository
+      description: Paste a minimal sample, attach a generated fixture, or link to a small reproduction repository. Remove sensitive data first.
+      render: text
+
+  - type: textarea
+    id: performance
+    attributes:
+      label: Performance details
+      description: If this involves slowness, freezing, or memory use, include timings, hardware/storage details, and approximate memory use when available.
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add screenshots, recordings, settings, or anything else that may help diagnose the problem.

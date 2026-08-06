@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { JsonEngine, collectUnsafeIntegers, stringifyWithinLimit } from '../../src/worker/jsonEngine.js';
+import { JsonEngine, collectUnsafeIntegers, jsonLiteralAtPointer, stringifyWithinLimit } from '../../src/worker/jsonEngine.js';
 
 describe('JsonEngine', () => {
   it('serializes only containers that fit the inline-copy budget', () => {
@@ -71,6 +71,14 @@ describe('JsonEngine', () => {
     const engine = JsonEngine.parse(source, true);
     expect(engine.summary('/value', 'value').preview).toBe('2');
     expect(engine.location('/value').offset).toBe(source.lastIndexOf('2'));
+  });
+
+  it('extracts exact source literals without rounding numbers or decoding string escapes', () => {
+    const source = '{"nested": { "id": 900719925474099312345, "text": "line\\nnext" }, "value": 1, "value": 2}';
+    expect(jsonLiteralAtPointer(source, '/nested')).toBe('{ "id": 900719925474099312345, "text": "line\\nnext" }');
+    expect(jsonLiteralAtPointer(source, '/nested/id')).toBe('900719925474099312345');
+    expect(jsonLiteralAtPointer(source, '/nested/text')).toBe('"line\\nnext"');
+    expect(jsonLiteralAtPointer(source, '/value')).toBe('2');
   });
 
   it('searches keys and values asynchronously', async () => {

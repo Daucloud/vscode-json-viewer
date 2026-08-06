@@ -30,6 +30,39 @@ function lineAt(text: string, physicalLine: number): LineSlice {
   return { start, end, text: text.slice(start, end) };
 }
 
+function compactJsonWhitespace(text: string): string {
+  let output = '';
+  let inString = false;
+  let escaped = false;
+  for (const character of text) {
+    if (inString) {
+      output += character;
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      output += character;
+    } else if (character !== ' ' && character !== '\t' && character !== '\r' && character !== '\n') {
+      output += character;
+    }
+  }
+  return output;
+}
+
+function validatedRawLiteral(raw: string, compact: boolean): string {
+  const literal = raw.trim();
+  if (!literal) throw new PreviewError('INVALID_EDIT', 'Enter a valid JSON value.');
+  try {
+    JSON.parse(literal);
+  } catch (error) {
+    throw new PreviewError('INVALID_EDIT', `Enter a valid JSON value: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return compact ? compactJsonWhitespace(literal) : literal;
+}
+
 export function applyJsonEdit(source: string, edit: JsonEditOperation, compact = false): string {
   const bom = source.charCodeAt(0) === 0xfeff ? '\ufeff' : '';
   const text = bom ? source.slice(1) : source;
@@ -38,7 +71,13 @@ export function applyJsonEdit(source: string, edit: JsonEditOperation, compact =
   const options = formattingOptions ? { formattingOptions } : {};
   let result: string;
 
-  if (edit.kind === 'rename') {
+  if (edit.kind === 'setRaw') {
+    const tree = parseTree(text);
+    const node = tree ? findNodeAtLocation(tree, path) : undefined;
+    if (!node) throw new PreviewError('POINTER_NOT_FOUND', 'The selected value no longer exists.');
+    const literal = validatedRawLiteral(edit.raw, compact);
+    result = `${text.slice(0, node.offset)}${literal}${text.slice(node.offset + node.length)}`;
+  } else if (edit.kind === 'rename') {
     if (path.length === 0 || !edit.newKey.trim()) throw new PreviewError('INVALID_EDIT', 'A property name is required.');
     const oldKey = path[path.length - 1];
     if (typeof oldKey !== 'string') throw new PreviewError('INVALID_EDIT', 'Array items cannot be renamed.');
